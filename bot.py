@@ -9,7 +9,7 @@ settings = {
     "integrated_bots": []
 }
 
-def start(update: Update, context: CallbackContext):
+def start(update: Update, context):
     keyboard = [[InlineKeyboardButton("Upload", callback_data='upload')],
                 [InlineKeyboardButton("Fetch File", callback_data='fetch_file')],
                 [InlineKeyboardButton("Settings", callback_data='settings')]]
