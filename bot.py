@@ -104,7 +104,7 @@ async def button_handler(update: Update, context: CallbackContext):
 
 # Register Handlers
 app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.ATTACHMENT.document | filters.ATTACHMENT.video | filters.ATTACHMENT.audio | filters.ATTACHMENT.photo, receive_file))
+app.add_handler(MessageHandler(filters.Document.ALL | filters.Video.ALL | filters.Audio.ALL | filters.PHOTO, receive_file))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, verify_password))
 app.add_handler(CallbackQueryHandler(button_handler))
 
