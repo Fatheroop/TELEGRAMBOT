@@ -12,32 +12,35 @@ from telegram.ext import (
     filters,
 )
 
-# Patch the event loop (useful in environments like Render)
+# Patch the event loop (useful for cloud environments)
 nest_asyncio.apply()
 
-# ----- Global Data -----
-# For tracking user sessions; key: chat_id, value: dictionary with state info.
-user_sessions = {}
-# Dummy group data – replace with your actual data if needed.
-group_data = {"Group1": "This is Group1", "Group2": "This is Group2"}
-# For storing added bots (key: token, value: bot name)
-bot_list = {}
-# Global admin password; initially set to "12345"
-ADMIN_PASSWORD = "12345"
+# ----- Global Data Storage -----
+user_sessions = {}         # Stores session state by chat_id
+group_data = {}            # Stores groups added by admin; group_name -> group info
+# For integrated bots, we use a dict. Additionally, we store the "ECESS BOT" shortcut.
+integrated_bots = {}       # bot_username (str) -> info dictionary
+ECESS_BOT_SHORTCUT = None  # Will hold the shortcut if a bot with username "@ecessbot" is added
 
-# ----- Handlers and Functions -----
+# For groups, you can also assign an admin bot (if desired)
+group_admin_bots = {}      # group_name -> bot_username
 
-# /start command: show main menu with Upload File, Fetch File, and Settings.
+ADMIN_PASSWORD = "12345"   # Initial admin password
+
+# ----- Main Menu -----
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📤 Upload File", callback_data="upload")],
         [InlineKeyboardButton("📥 Fetch File", callback_data="fetch")],
-        [InlineKeyboardButton("⚙️ Settings", callback_data="settings")]
+        [InlineKeyboardButton("⚙️ Settings", callback_data="settings")],
+        [InlineKeyboardButton("✉️ Send to Integrated Bot", callback_data="send_integration")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Select an option:", reply_markup=reply_markup)
+    await update.message.reply_text("Main Menu – select an option:", reply_markup=reply_markup)
 
-# CallbackQuery handler: routes callback data to the appropriate function.
+# ----- CallbackQuery Handler -----
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -49,54 +52,69 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "fetch":
         await fetch_file(query, context)
     elif data == "settings":
-        # Ask for admin password and update session state.
         await query.message.reply_text("Enter admin password:")
         user_sessions[chat_id] = {"step": "waiting_for_password"}
-    elif data == "add_bot":
-        await init_add_bot(query, context)
-    elif data == "remove_bot":
-        await init_remove_bot(query, context)
+    elif data == "send_integration":
+        await query.message.reply_text("Enter group name for your cloud call:")
+        user_sessions[chat_id] = {"step": "waiting_for_group_for_call"}
+    elif data == "integrate_bot":
+        await query.message.reply_text("Enter bot username to integrate (e.g., @ecessbot):")
+        user_sessions[chat_id] = {"step": "waiting_for_new_integrated_bot"}
+    elif data == "remove_integrated_bot":
+        await query.message.reply_text("Enter bot username to remove:")
+        user_sessions[chat_id] = {"step": "waiting_for_remove_integrated_bot"}
     elif data == "manage_groups":
-        await init_manage_groups(query, context)
+        keyboard = [
+            [InlineKeyboardButton("➕ Add Group", callback_data="add_group")],
+            [InlineKeyboardButton("➖ Remove Group", callback_data="remove_group")],
+            [InlineKeyboardButton("🛠 Assign Bot to Group", callback_data="assign_bot")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.reply_text("Manage Groups Menu:", reply_markup=reply_markup)
     elif data == "change_password":
-        await init_change_password(query, context)
+        await query.message.reply_text("Enter new admin password:")
+        user_sessions[chat_id] = {"step": "waiting_for_new_password"}
     elif data == "add_group":
-        await query.message.reply_text("Enter new group name to add:")
+        await query.message.reply_text("Enter new group name:")
         user_sessions[chat_id]["step"] = "waiting_for_new_group"
     elif data == "remove_group":
         await query.message.reply_text("Enter group name to remove:")
         user_sessions[chat_id]["step"] = "waiting_for_remove_group"
-    elif data.startswith("select_group_"):
-        group_name = data.split("select_group_")[1]
-        await query.message.reply_text(f"File has been uploaded to group: {group_name}")
-        # Clear the file upload session.
-        if chat_id in user_sessions:
-            user_sessions.pop(chat_id)
+    elif data == "assign_bot":
+        await query.message.reply_text("Enter group name to assign a bot to:")
+        user_sessions[chat_id]["step"] = "waiting_for_assign_group"
+    elif data.startswith("choose_bot_"):
+        # Callback data format: "choose_bot__<group>__<bot_username>"
+        parts = data.split("__")
+        if len(parts) == 3:
+            group = parts[1]
+            bot_username = parts[2]
+            group_admin_bots[group] = bot_username
+            await query.message.reply_text(f"Bot {bot_username} assigned to group '{group}'.")
+        else:
+            await query.message.reply_text("Invalid selection.")
     else:
         await query.message.reply_text("Unknown option.")
 
-# Called when the "Upload File" option is chosen.
+# ----- File Upload / Fetch Functions -----
+
 async def upload_file(query, context: ContextTypes.DEFAULT_TYPE):
     await query.message.reply_text("Send the file you want to upload.")
     user_sessions[query.message.chat_id] = {"step": "waiting_for_file"}
 
-# Called when a file (document or photo) is received.
 async def receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
     session = user_sessions.get(chat_id, {})
     if session.get("step") != "waiting_for_file":
-        return  # Not expecting a file.
+        return
 
-    # Try to get a document or, if not present, the last photo.
     file_obj = update.message.document
     if not file_obj and update.message.photo:
         file_obj = update.message.photo[-1]
-
     if not file_obj:
         await update.message.reply_text("No valid file detected. Please send a document or photo.")
         return
 
-    # Save the file info and prompt for group selection.
     session["step"] = "waiting_for_group"
     session["file"] = file_obj
 
@@ -107,9 +125,8 @@ async def receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text("Select a group to upload your file to:", reply_markup=reply_markup)
     else:
-        await update.message.reply_text("No groups available to select.")
+        await update.message.reply_text("No groups available.")
 
-# Dummy fetch function: display available groups for file fetching.
 async def fetch_file(query, context: ContextTypes.DEFAULT_TYPE):
     if group_data:
         keyboard = []
@@ -120,32 +137,10 @@ async def fetch_file(query, context: ContextTypes.DEFAULT_TYPE):
     else:
         await query.message.reply_text("No files found.")
 
-# ----- Admin Functions for Settings ----
-
-async def init_add_bot(query, context: ContextTypes.DEFAULT_TYPE):
-    await query.message.reply_text("Enter new bot token and name separated by a space (e.g., <token> BotName):")
-    user_sessions[query.message.chat_id] = {"step": "waiting_for_new_bot"}
-
-async def init_remove_bot(query, context: ContextTypes.DEFAULT_TYPE):
-    await query.message.reply_text("Enter bot token to remove:")
-    user_sessions[query.message.chat_id] = {"step": "waiting_for_remove_bot"}
-
-async def init_manage_groups(query, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("➕ Add Group", callback_data="add_group")],
-        [InlineKeyboardButton("➖ Remove Group", callback_data="remove_group")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.message.reply_text("Manage Groups Menu:", reply_markup=reply_markup)
-
-async def init_change_password(query, context: ContextTypes.DEFAULT_TYPE):
-    await query.message.reply_text("Enter new admin password:")
-    user_sessions[query.message.chat_id] = {"step": "waiting_for_new_password"}
-
-# ----- Text Message Handler for Admin Steps ----
+# ----- Admin and Integration Text Handler -----
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global ADMIN_PASSWORD
+    global ADMIN_PASSWORD, ECESS_BOT_SHORTCUT
     chat_id = update.message.chat_id
     session = user_sessions.get(chat_id, {})
     if not session or "step" not in session:
@@ -156,10 +151,10 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     if step == "waiting_for_password":
         if update.message.text.strip() == ADMIN_PASSWORD:
             keyboard = [
-                [InlineKeyboardButton("➕ Add Bot", callback_data="add_bot")],
-                [InlineKeyboardButton("➖ Remove Bot", callback_data="remove_bot")],
-                [InlineKeyboardButton("📋 Manage Groups", callback_data="manage_groups")],
-                [InlineKeyboardButton("🔑 Change Password", callback_data="change_password")]
+                [InlineKeyboardButton("Integrate Bot", callback_data="integrate_bot")],
+                [InlineKeyboardButton("Remove Integrated Bot", callback_data="remove_integrated_bot")],
+                [InlineKeyboardButton("Manage Groups", callback_data="manage_groups")],
+                [InlineKeyboardButton("Change Password", callback_data="change_password")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await update.message.reply_text("Settings Menu:", reply_markup=reply_markup)
@@ -167,24 +162,29 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text("Incorrect password!")
         session["step"] = None
 
-    elif step == "waiting_for_new_bot":
-        parts = update.message.text.split()
-        if len(parts) < 2:
-            await update.message.reply_text("Invalid input. Please provide token and name separated by space.")
+    elif step == "waiting_for_new_integrated_bot":
+        bot_username = update.message.text.strip()
+        if not bot_username.startswith("@"):
+            await update.message.reply_text("Please start the bot username with '@'.")
         else:
-            token = parts[0]
-            name = " ".join(parts[1:])
-            bot_list[token] = name
-            await update.message.reply_text(f"Bot '{name}' added successfully!")
+            integrated_bots[bot_username.lower()] = {"username": bot_username}
+            # If this is the ECESS BOT, set it as the shortcut.
+            if bot_username.lower() == "@ecessbot":
+                ECESS_BOT_SHORTCUT = bot_username
+                await update.message.reply_text(f"Bot {bot_username} integrated as your ECESS BOT shortcut!")
+            else:
+                await update.message.reply_text(f"Bot {bot_username} integrated successfully!")
         session["step"] = None
 
-    elif step == "waiting_for_remove_bot":
-        token = update.message.text.strip()
-        if token in bot_list:
-            removed_name = bot_list.pop(token)
-            await update.message.reply_text(f"Bot '{removed_name}' removed successfully!")
+    elif step == "waiting_for_remove_integrated_bot":
+        bot_username = update.message.text.strip().lower()
+        if bot_username in integrated_bots:
+            integrated_bots.pop(bot_username)
+            if ECESS_BOT_SHORTCUT and ECESS_BOT_SHORTCUT.lower() == bot_username:
+                ECESS_BOT_SHORTCUT = None
+            await update.message.reply_text(f"Bot {bot_username} removed from integration!")
         else:
-            await update.message.reply_text("Bot token not found!")
+            await update.message.reply_text("Bot not found in integrated bots.")
         session["step"] = None
 
     elif step == "waiting_for_new_password":
@@ -206,7 +206,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         if group_name in group_data:
             await update.message.reply_text("Group already exists.")
         else:
-            group_data[group_name] = f"This is {group_name}"
+            group_data[group_name] = f"Info for {group_name}"
             await update.message.reply_text(f"Group '{group_name}' added successfully!")
         session["step"] = None
 
@@ -214,15 +214,52 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         group_name = update.message.text.strip()
         if group_name in group_data:
             group_data.pop(group_name)
+            group_admin_bots.pop(group_name, None)
             await update.message.reply_text(f"Group '{group_name}' removed successfully!")
         else:
             await update.message.reply_text("Group not found.")
         session["step"] = None
 
+    elif step == "waiting_for_assign_group":
+        group_name = update.message.text.strip()
+        if group_name not in group_data:
+            await update.message.reply_text("Group not found. Please add the group first.")
+            session["step"] = None
+        elif not integrated_bots:
+            await update.message.reply_text("No integrated bots available. Please integrate one first.")
+            session["step"] = None
+        else:
+            session["assign_group"] = group_name
+            session["step"] = "waiting_for_bot_selection_for_group"
+            keyboard = []
+            for bot in integrated_bots.keys():
+                # Format: "choose_bot__<group>__<bot_username>"
+                keyboard.append([InlineKeyboardButton(integrated_bots[bot]["username"], callback_data=f"choose_bot__{group_name}__{bot}")])
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text("Select an integrated bot to assign to this group:", reply_markup=reply_markup)
+
+    elif step == "waiting_for_group_for_call":
+        group_name = update.message.text.strip()
+        # If a bot is assigned to this group, use it; otherwise, use ECESS_BOT_SHORTCUT if available.
+        if group_name in group_admin_bots:
+            bot_username = group_admin_bots[group_name]
+            await update.message.reply_text(f"Routing your call via the assigned bot: {bot_username}")
+        elif ECESS_BOT_SHORTCUT:
+            await update.message.reply_text(f"No group-specific bot assigned. Routing your call via ECESS BOT: {ECESS_BOT_SHORTCUT}")
+        else:
+            await update.message.reply_text("No integrated bot available for routing the call.")
+        session["step"] = None
+
     else:
         await update.message.reply_text("Command not recognized in this context.")
 
-# ----- Main function: Webhook setup and running the bot -----
+# ----- Demo Command (optional) -----
+
+async def send_to_integration(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Please enter your group name to send a call message to its integrated bot:")
+    user_sessions[update.message.chat_id] = {"step": "waiting_for_group_for_call"}
+
+# ----- Main Function -----
 
 async def main():
     load_dotenv()
@@ -230,24 +267,24 @@ async def main():
     WEBHOOK_URL = os.getenv("RENDER_WEBHOOK_URL")
     if not TOKEN or not WEBHOOK_URL:
         raise ValueError("Missing TELEGRAM_BOT_TOKEN or RENDER_WEBHOOK_URL in .env file!")
-
+    
     app = Application.builder().token(TOKEN).build()
 
-    # Register command and message handlers.
+    # Register handlers.
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("send_to_integration", send_to_integration))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.Document.ALL | filters.PHOTO, receive_file))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
-    # Set the webhook endpoint.
+    # Set webhook endpoint.
     webhook_endpoint = f"{WEBHOOK_URL}/{TOKEN}"
     await app.bot.set_webhook(webhook_endpoint)
 
-    # Patch the event loop's close method.
+    # Patch event loop close.
     loop = asyncio.get_event_loop()
     loop.close = lambda: None
 
-    # Run the bot using webhook.
     await app.run_webhook(
         listen="0.0.0.0",
         port=int(os.getenv("PORT", 8443)),
