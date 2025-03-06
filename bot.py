@@ -23,9 +23,9 @@ if not TOKEN or not WEBHOOK_URL:
 # Initialize the bot application
 app = Application.builder().token(TOKEN).build()
 
-# Global dictionaries to track user sessions and group data
+# Global dictionaries for user sessions and group data
 user_sessions = {}  # e.g., { chat_id: { "step": "waiting_for_file", ... } }
-group_data = {}     # To store group details for file operations (dummy implementation)
+group_data = {}     # Dummy placeholder for group details
 
 # ======================= Command and Callback Handlers =======================
 
@@ -52,7 +52,6 @@ async def receive_file(update: Update, context: CallbackContext):
     if user_id not in user_sessions or user_sessions[user_id].get("step") != "waiting_for_file":
         return
 
-    # Use available media types from the message:
     file = update.message.document or update.message.video or update.message.audio or update.message.photo[-1]
     file_type = (
         "document" if update.message.document
@@ -74,8 +73,10 @@ async def fetch_file(update: Update, context: CallbackContext):
     if not group_data:
         await query.message.reply_text("❌ No files found.")
         return
-    keyboard = [[InlineKeyboardButton(f"{group}", callback_data=f"fetch_{group}")]
-                for group in group_data]
+    keyboard = [
+        [InlineKeyboardButton(f"{group}", callback_data=f"fetch_{group}")]
+        for group in group_data
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.message.reply_text("📂 Choose a group:", reply_markup=reply_markup)
 
@@ -105,7 +106,7 @@ async def verify_password(update: Update, context: CallbackContext):
         await update.message.reply_text("❌ Incorrect password!")
     user_sessions[user_id]["step"] = None
 
-# Handle button callbacks
+# Handle callback queries
 async def button_handler(update: Update, context: CallbackContext):
     query = update.callback_query
     await query.answer()
@@ -119,9 +120,9 @@ async def button_handler(update: Update, context: CallbackContext):
 # ======================= Register Handlers =======================
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(button_handler))
-# Use the correct filters for media: documents, photos, audio, and video.
+# Use filters to capture all media types
 app.add_handler(MessageHandler(
-    filters.Document.ALL | filters.PHOTO | filters.AUDIO | filters.VIDEO, 
+    filters.Document.ALL | filters.VIDEO | filters.AUDIO | filters.PHOTO,
     receive_file
 ))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, verify_password))
@@ -129,9 +130,7 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, verify_password)
 # ======================= Main Function: Webhook Setup and Run =======================
 async def main():
     print("🚀 Bot is starting...")
-    # Set webhook for Render deployment
     await app.bot.set_webhook(WEBHOOK_URL)
-    # Run webhook listener
     await app.run_webhook(
         listen="0.0.0.0",
         port=8443,
@@ -139,6 +138,15 @@ async def main():
         webhook_url=WEBHOOK_URL
     )
 
-# ======================= Run the Bot =======================
+# ======================= Run the Bot with Correct Event Loop Handling =======================
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except RuntimeError as e:
+        if "already running" in str(e):
+            # If an event loop is already running, schedule the main coroutine and run forever.
+            loop = asyncio.get_event_loop()
+            loop.create_task(main())
+            loop.run_forever()
+        else:
+            raise
