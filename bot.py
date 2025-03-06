@@ -12,7 +12,7 @@ from telegram.ext import (
     CallbackContext,
 )
 
-# Apply nest_asyncio to allow nested event loops
+# Apply nest_asyncio to patch the event loop (helps in environments like Render)
 nest_asyncio.apply()
 
 # Load environment variables from .env file
@@ -110,7 +110,7 @@ async def verify_password(update: Update, context: CallbackContext):
         await update.message.reply_text("❌ Incorrect password!")
     user_sessions[user_id]["step"] = None
 
-# Handle callback queries from buttons
+# Handle callback queries
 async def button_handler(update: Update, context: CallbackContext):
     query = update.callback_query
     await query.answer()
@@ -124,7 +124,7 @@ async def button_handler(update: Update, context: CallbackContext):
 # ======================= Register Handlers =======================
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(button_handler))
-# Use filters for media files: documents, videos, audio, and photos.
+# Use filters for media files: documents, videos, audios, and photos.
 app.add_handler(MessageHandler(
     filters.Document.ALL | filters.VIDEO | filters.AUDIO | filters.PHOTO,
     receive_file
@@ -134,12 +134,17 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, verify_password)
 # ======================= Main Function: Webhook Setup and Run =======================
 async def main():
     print("🚀 Bot is starting...")
-    await app.bot.set_webhook(WEBHOOK_URL)
+    # Build full webhook endpoint: append token to URL
+    webhook_endpoint = f"{WEBHOOK_URL}/{TOKEN}"
+    await app.bot.set_webhook(webhook_endpoint)
+    # Patch the event loop's close method to avoid "Cannot close a running event loop" error.
+    loop = asyncio.get_event_loop()
+    loop.close = lambda: None
     await app.run_webhook(
         listen="0.0.0.0",
-        port=8443,
+        port=int(os.getenv("PORT", 8443)),
         url_path=TOKEN,
-        webhook_url=WEBHOOK_URL
+        webhook_url=webhook_endpoint
     )
 
 # ======================= Run the Bot =======================
@@ -147,7 +152,6 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except RuntimeError as e:
-        # If the event loop is already running, schedule main() in the current loop.
         if "already running" in str(e):
             loop = asyncio.get_event_loop()
             loop.create_task(main())
