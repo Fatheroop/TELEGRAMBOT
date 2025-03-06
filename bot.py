@@ -12,22 +12,22 @@ from telegram.ext import (
     filters,
 )
 
-# Patch the event loop (for environments like Render)
+# Patch the event loop (useful in environments like Render)
 nest_asyncio.apply()
 
 # ----- Global Data -----
-# Sessions to keep track of user/admin state (keyed by chat_id)
-user_sessions = {}  
-# Dummy group data; later replace with your actual group info
+# For tracking user sessions; key: chat_id, value: dictionary with state info.
+user_sessions = {}
+# Dummy group data – replace with your actual data if needed.
 group_data = {"Group1": "This is Group1", "Group2": "This is Group2"}
-# A simple dictionary to hold added bots (token: bot name)
+# For storing added bots (key: token, value: bot name)
 bot_list = {}
-# Global admin password (for settings). Initially "12345"
+# Global admin password; initially set to "12345"
 ADMIN_PASSWORD = "12345"
 
 # ----- Handlers and Functions -----
 
-# /start command shows the main menu with three options.
+# /start command: show main menu with Upload File, Fetch File, and Settings.
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📤 Upload File", callback_data="upload")],
@@ -37,7 +37,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("Select an option:", reply_markup=reply_markup)
 
-# CallbackQuery handler routes based on callback data.
+# CallbackQuery handler: routes callback data to the appropriate function.
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -49,7 +49,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "fetch":
         await fetch_file(query, context)
     elif data == "settings":
-        # Ask for admin password and set session state.
+        # Ask for admin password and update session state.
         await query.message.reply_text("Enter admin password:")
         user_sessions[chat_id] = {"step": "waiting_for_password"}
     elif data == "add_bot":
@@ -69,13 +69,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("select_group_"):
         group_name = data.split("select_group_")[1]
         await query.message.reply_text(f"File has been uploaded to group: {group_name}")
-        # Clear file upload session.
+        # Clear the file upload session.
         if chat_id in user_sessions:
             user_sessions.pop(chat_id)
     else:
         await query.message.reply_text("Unknown option.")
 
-# Called when user clicks "Upload File": ask the user to send a file.
+# Called when the "Upload File" option is chosen.
 async def upload_file(query, context: ContextTypes.DEFAULT_TYPE):
     await query.message.reply_text("Send the file you want to upload.")
     user_sessions[query.message.chat_id] = {"step": "waiting_for_file"}
@@ -87,7 +87,7 @@ async def receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if session.get("step") != "waiting_for_file":
         return  # Not expecting a file.
 
-    # Check for a document or take the last photo.
+    # Try to get a document or, if not present, the last photo.
     file_obj = update.message.document
     if not file_obj and update.message.photo:
         file_obj = update.message.photo[-1]
@@ -96,11 +96,10 @@ async def receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No valid file detected. Please send a document or photo.")
         return
 
-    # Store file info and move to the next step: selecting a group.
+    # Save the file info and prompt for group selection.
     session["step"] = "waiting_for_group"
     session["file"] = file_obj
 
-    # Show available groups as inline buttons.
     if group_data:
         keyboard = []
         for group in group_data.keys():
@@ -110,7 +109,7 @@ async def receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("No groups available to select.")
 
-# Dummy fetch function: shows groups available for file fetching.
+# Dummy fetch function: display available groups for file fetching.
 async def fetch_file(query, context: ContextTypes.DEFAULT_TYPE):
     if group_data:
         keyboard = []
@@ -121,7 +120,7 @@ async def fetch_file(query, context: ContextTypes.DEFAULT_TYPE):
     else:
         await query.message.reply_text("No files found.")
 
-# ---- Admin Functions: Initiate actions via settings ----
+# ----- Admin Functions for Settings ----
 
 async def init_add_bot(query, context: ContextTypes.DEFAULT_TYPE):
     await query.message.reply_text("Enter new bot token and name separated by a space (e.g., <token> BotName):")
@@ -138,26 +137,23 @@ async def init_manage_groups(query, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.message.reply_text("Manage Groups Menu:", reply_markup=reply_markup)
-    # The next step is determined by the chosen inline button (handled in button_handler).
 
 async def init_change_password(query, context: ContextTypes.DEFAULT_TYPE):
     await query.message.reply_text("Enter new admin password:")
     user_sessions[query.message.chat_id] = {"step": "waiting_for_new_password"}
 
-# ---- Text Message Handler: Handles multiple admin steps ----
+# ----- Text Message Handler for Admin Steps ----
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global ADMIN_PASSWORD
     chat_id = update.message.chat_id
     session = user_sessions.get(chat_id, {})
-
     if not session or "step" not in session:
-        # No pending state; ignore or send a default response.
         return
 
     step = session["step"]
 
     if step == "waiting_for_password":
-        # Check admin password.
         if update.message.text.strip() == ADMIN_PASSWORD:
             keyboard = [
                 [InlineKeyboardButton("➕ Add Bot", callback_data="add_bot")],
@@ -172,7 +168,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         session["step"] = None
 
     elif step == "waiting_for_new_bot":
-        # Expect input: bot token and bot name separated by space.
         parts = update.message.text.split()
         if len(parts) < 2:
             await update.message.reply_text("Invalid input. Please provide token and name separated by space.")
@@ -193,7 +188,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         session["step"] = None
 
     elif step == "waiting_for_new_password":
-        # Save new password and ask for confirmation.
         session["new_password"] = update.message.text.strip()
         session["step"] = "waiting_for_password_confirmation"
         await update.message.reply_text("Please re-enter new password for confirmation:")
@@ -201,7 +195,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     elif step == "waiting_for_password_confirmation":
         new_pass = session.get("new_password")
         if update.message.text.strip() == new_pass:
-            global ADMIN_PASSWORD
             ADMIN_PASSWORD = new_pass
             await update.message.reply_text("Admin password changed successfully!")
         else:
@@ -229,7 +222,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     else:
         await update.message.reply_text("Command not recognized in this context.")
 
-# ----- Main function -----
+# ----- Main function: Webhook setup and running the bot -----
 
 async def main():
     load_dotenv()
@@ -240,19 +233,17 @@ async def main():
 
     app = Application.builder().token(TOKEN).build()
 
-    # Register handlers.
+    # Register command and message handlers.
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
-    # For file uploads (document or photo).
     app.add_handler(MessageHandler(filters.Document.ALL | filters.PHOTO, receive_file))
-    # For handling various text inputs (admin password, add bot, change password, group management, etc.)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
-    # Set the webhook endpoint (TOKEN appended as suffix)
+    # Set the webhook endpoint.
     webhook_endpoint = f"{WEBHOOK_URL}/{TOKEN}"
     await app.bot.set_webhook(webhook_endpoint)
 
-    # Patch the event loop’s close method to avoid "Cannot close a running event loop" error.
+    # Patch the event loop's close method.
     loop = asyncio.get_event_loop()
     loop.close = lambda: None
 
