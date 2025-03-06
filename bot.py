@@ -23,7 +23,7 @@ if not TOKEN or not WEBHOOK_URL:
 # Initialize the bot application
 app = Application.builder().token(TOKEN).build()
 
-# Global dictionaries for user sessions and group data
+# Global dictionaries to track user sessions and group data
 user_sessions = {}  # e.g., { chat_id: { "step": "waiting_for_file", ... } }
 group_data = {}     # To store group details for file operations (dummy implementation)
 
@@ -52,6 +52,7 @@ async def receive_file(update: Update, context: CallbackContext):
     if user_id not in user_sessions or user_sessions[user_id].get("step") != "waiting_for_file":
         return
 
+    # Use available media types from the message:
     file = update.message.document or update.message.video or update.message.audio or update.message.photo[-1]
     file_type = (
         "document" if update.message.document
@@ -118,8 +119,11 @@ async def button_handler(update: Update, context: CallbackContext):
 # ======================= Register Handlers =======================
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(button_handler))
-# Use filters.MEDIA to capture all media types (documents, videos, audios, photos)
-app.add_handler(MessageHandler(filters.MEDIA, receive_file))
+# Use the correct filters for media: documents, photos, audio, and video.
+app.add_handler(MessageHandler(
+    filters.Document.ALL | filters.PHOTO | filters.AUDIO | filters.VIDEO, 
+    receive_file
+))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, verify_password))
 
 # ======================= Main Function: Webhook Setup and Run =======================
