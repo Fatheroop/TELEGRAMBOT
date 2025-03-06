@@ -1,1 +1,1 @@
-worker: python your_bot_script.py
+web: gunicorn bot:app
