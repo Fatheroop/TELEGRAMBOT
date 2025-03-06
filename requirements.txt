@@ -1,5 +1,2 @@
 python-telegram-bot==20.6
-python-dotenv
-requests
-flask
-gunicorn
+python-dotenv==1.0.1
