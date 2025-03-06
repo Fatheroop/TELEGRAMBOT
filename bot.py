@@ -1,66 +1,100 @@
 import os
-import logging
 import asyncio
+import logging
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    filters,
+)
 
 # Load environment variables
 load_dotenv()
-TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("RENDER_APP_URL")  # Set this in Render
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+WEBHOOK_URL = os.getenv("RENDER_WEBHOOK_URL")
 
-# Configure logging
-logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
+# Logging setup
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
-# Password-protected settings
-BOT_PASSWORD = "12345"
-admin_access = False  # Track admin login
+# Password for settings
+SETTINGS_PASSWORD = "12345"
+user_states = {}
 
-def check_password(user_input):
-    global admin_access
-    if user_input == BOT_PASSWORD:
-        admin_access = True
-        return "Access granted. You can now modify settings."
-    return "Incorrect password. Try again."
+# Start command
+async def start(update: Update, context):
+    await update.message.reply_text("Welcome! Use /menu to access options.")
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton("Upload", callback_data='upload')],
-                [InlineKeyboardButton("Fetch File", callback_data='fetch')],
-                [InlineKeyboardButton("Settings", callback_data='settings')]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Welcome! Choose an option:", reply_markup=reply_markup)
+# Main menu
+async def menu(update: Update, context):
+    keyboard = [
+        [InlineKeyboardButton("📤 Upload File", callback_data="upload")],
+        [InlineKeyboardButton("📥 Fetch File", callback_data="fetch")],
+        [InlineKeyboardButton("⚙ Settings", callback_data="settings")],
+    ]
+    await update.message.reply_text("Choose an option:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if query.data == "upload":
-        await query.message.reply_text("Send the file you want to upload.")
-    elif query.data == "fetch":
-        await query.message.reply_text("Fetching files...")
-    elif query.data == "settings":
-        await query.message.reply_text("Enter password to access settings:")
-
-async def file_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    file = update.message.document or update.message.photo or update.message.audio
+# Upload file handler
+async def file_upload_handler(update: Update, context):
+    file = update.message.document or update.message.video or update.message.audio or update.message.photo
     if file:
-        await update.message.reply_text(f"File received: {file.file_name}")
-    else:
-        await update.message.reply_text("Please send a valid file.")
+        await update.message.reply_text(f"File received: {file.file_id}")
 
-async def webhook_setup():
+# Fetch file (dummy example)
+async def fetch_file(update: Update, context):
+    await update.callback_query.message.reply_text("Fetching file... (Feature in progress)")
+
+# Settings menu
+async def settings(update: Update, context):
+    query = update.callback_query
+    await query.message.reply_text("Enter password to access settings:")
+    user_states[query.from_user.id] = "awaiting_password"
+
+# Password verification
+async def password_check(update: Update, context):
+    user_id = update.message.from_user.id
+    if user_states.get(user_id) == "awaiting_password":
+        if update.message.text == SETTINGS_PASSWORD:
+            keyboard = [
+                [InlineKeyboardButton("➕ Add Bot", callback_data="add_bot")],
+                [InlineKeyboardButton("➖ Remove Bot", callback_data="remove_bot")],
+                [InlineKeyboardButton("🔄 Change Password", callback_data="change_password")],
+            ]
+            await update.message.reply_text("Settings unlocked:", reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await update.message.reply_text("Incorrect password! Try again.")
+        user_states[user_id] = None
+
+# Webhook setup
+async def set_webhook():
     app = Application.builder().token(TOKEN).build()
     await app.bot.set_webhook(url=WEBHOOK_URL)
-    logger.info("Webhook set successfully.")
+    logger.info(f"Webhook set to: {WEBHOOK_URL}")
 
+# Main function
 async def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("menu", menu))
+    app.add_handler(CallbackQueryHandler(fetch_file, pattern="fetch"))
+    app.add_handler(CallbackQueryHandler(settings, pattern="settings"))
+    app.add_handler(MessageHandler(filters.TEXT, password_check))
     app.add_handler(MessageHandler(filters.ATTACHMENT, file_upload_handler))
-    app.add_handler(CallbackQueryHandler(button_handler))
+    
+    # Start webhook
     logger.info("Bot is running...")
-    await app.run_polling()
+    await app.run_webhook(listen="0.0.0.0", port=8443, url_path=TOKEN, webhook_url=WEBHOOK_URL)
 
+# Start bot with correct event loop
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.get_event_loop().run_until_complete(main())
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(main())
