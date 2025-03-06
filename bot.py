@@ -1,5 +1,5 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters, CallbackContext
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 
 # Dictionary to store settings
 settings = {
@@ -83,8 +83,8 @@ def group_invite_handler(update: Update, context: CallbackContext):
         update.message.reply_text("Invalid request.")
 
 def main():
-    updater = Updater("7883838296:AAEbNXZVmiA9GlUsqtKGWhrk-Bs5OTQOmVI", use_context=True)
-    dp = updater.dispatcher
+    app = Application.builder().token("7883838296:AAEbNXZVmiA9GlUsqtKGWhrk-Bs5OTQOmVI").build()
+    dp = app
     
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CallbackQueryHandler(button_handler))
@@ -93,9 +93,7 @@ def main():
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, password_handler))
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, group_link_handler))
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, group_invite_handler))
-    
-    updater.start_polling()
-    updater.idle()
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
