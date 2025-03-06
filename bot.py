@@ -15,10 +15,10 @@ user_password_attempts = {}
 # Start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("📤 Upload File", callback_data='upload')],
-        [InlineKeyboardButton("📥 Fetch File", callback_data='fetch_file')],
-        [InlineKeyboardButton("⚙️ Settings", callback_data='settings')],
-        [InlineKeyboardButton("🤖 Manage Bots", callback_data='manage_bots')]
+        [InlineKeyboardButton("\ud83d\udce4 Upload File", callback_data='upload')],
+        [InlineKeyboardButton("\ud83d\udce5 Fetch File", callback_data='fetch_file')],
+        [InlineKeyboardButton("\u2699\ufe0f Settings", callback_data='settings')],
+        [InlineKeyboardButton("\ud83e\udd16 Manage Bots", callback_data='manage_bots')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("Welcome! Choose an option:", reply_markup=reply_markup)
@@ -52,24 +52,24 @@ async def password_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             elif option == "bots":
                 await update.message.reply_text("Manage Bots:", reply_markup=get_bot_settings_buttons())
         else:
-            await update.message.reply_text("❌ Wrong password! Try again.")
+            await update.message.reply_text("\u274c Wrong password! Try again.")
     else:
         await update.message.reply_text("Invalid command.")
 
 # Get settings menu buttons
 def get_settings_buttons():
     keyboard = [
-        [InlineKeyboardButton("➕ Add Group", callback_data="add_group")],
-        [InlineKeyboardButton("➖ Remove Group", callback_data="remove_group")],
-        [InlineKeyboardButton("🔑 Change Password", callback_data="change_password")]
+        [InlineKeyboardButton("\u2795 Add Group", callback_data="add_group")],
+        [InlineKeyboardButton("\u2796 Remove Group", callback_data="remove_group")],
+        [InlineKeyboardButton("\ud83d\udd11 Change Password", callback_data="change_password")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
 # Get bot management buttons
 def get_bot_settings_buttons():
     keyboard = [
-        [InlineKeyboardButton("➕ Add Bot", callback_data="add_bot")],
-        [InlineKeyboardButton("➖ Remove Bot", callback_data="remove_bot")]
+        [InlineKeyboardButton("\u2795 Add Bot", callback_data="add_bot")],
+        [InlineKeyboardButton("\u2796 Remove Bot", callback_data="remove_bot")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -88,13 +88,13 @@ async def file_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 # Handle adding bots
 async def add_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings["integrated_bots"].append(update.message.text)
-    await update.message.reply_text("✅ Bot added successfully!")
+    await update.message.reply_text("\u2705 Bot added successfully!")
 
 # Handle removing bots
 async def remove_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text in settings["integrated_bots"]:
         settings["integrated_bots"].remove(update.message.text)
-        await update.message.reply_text("❌ Bot removed successfully!")
+        await update.message.reply_text("\u274c Bot removed successfully!")
     else:
         await update.message.reply_text("Bot not found.")
 
