@@ -1,56 +1,71 @@
-from flask import Flask, request
-import telegram
-from telegram.ext import Dispatcher, CommandHandler, CallbackQueryHandler, MessageHandler, Filters
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
-TOKEN = "7883838296:AAEbNXZVmiA9GlUsqtKGWhrk-Bs5OTQOmVI"
-bot = telegram.Bot(token=TOKEN)
-
-app = Flask(__name__)
-
-# Dictionary to store settings
+# Bot settings
+BOT_PASSWORD = "12345"
 settings = {
-    "password": "12345",
     "upload_groups": [],
     "fetch_groups": [],
     "integrated_bots": []
 }
 
-def start(update, context):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [telegram.InlineKeyboardButton("Upload", callback_data='upload')],
-        [telegram.InlineKeyboardButton("Fetch File", callback_data='fetch_file')],
-        [telegram.InlineKeyboardButton("Settings", callback_data='settings')]
+        [InlineKeyboardButton("\ud83d\udcc4 Upload", callback_data='upload')],
+        [InlineKeyboardButton("\ud83d\udce5 Fetch File", callback_data='fetch_file')],
+        [InlineKeyboardButton("⚙️ Settings", callback_data='settings')]
     ]
-    reply_markup = telegram.InlineKeyboardMarkup(keyboard)
-    update.message.reply_text("Welcome to the bot! Choose an option:", reply_markup=reply_markup)
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("Welcome! Choose an option:", reply_markup=reply_markup)
 
-def button_handler(update, context):
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    query.answer()
+    await query.answer()
     
     if query.data == "upload":
-        query.message.reply_text("Send the file you want to upload.")
+        await query.message.reply_text("Send the file you want to upload.")
     elif query.data == "fetch_file":
-        query.message.reply_text("Fetching files... (Feature not implemented)")
+        await query.message.reply_text("Fetching files... (Coming soon!)")
     elif query.data == "settings":
-        query.message.reply_text("Enter password to access settings.")
+        await query.message.reply_text("Enter password to access settings.")
 
-def file_upload_handler(update, context):
+async def check_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == BOT_PASSWORD:
+        keyboard = [
+            [InlineKeyboardButton("➕ Add Group", callback_data='add_group')],
+            [InlineKeyboardButton("❌ Remove Group", callback_data='remove_group')],
+            [InlineKeyboardButton("🔄 Change Password", callback_data='change_password')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("Settings Menu:", reply_markup=reply_markup)
+    else:
+        await update.message.reply_text("❌ Incorrect Password! Try again.")
+
+async def file_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file = update.message.document or update.message.video or update.message.audio or update.message.photo[-1]
-    update.message.reply_text(f"File received: {file.file_id}. Select a group to upload.")
+    await update.message.reply_text(f"File received: {file.file_id}. Send a group invitation link to upload.")
 
-# Webhook endpoint
-@app.route(f"/{TOKEN}", methods=["POST"])
-def webhook():
-    update = telegram.Update.de_json(request.get_json(force=True), bot)
-    dispatcher.process_update(update)
-    return "OK", 200
+async def add_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    group_link = update.message.text
+    if "t.me" in group_link:
+        settings["upload_groups"].append(group_link)
+        await update.message.reply_text(f"✅ Group added: {group_link}")
+    else:
+        await update.message.reply_text("❌ Invalid link! Send a valid Telegram group invite link.")
 
-# Initialize the Dispatcher
-dispatcher = Dispatcher(bot, None, use_context=True)
-dispatcher.add_handler(CommandHandler("start", start))
-dispatcher.add_handler(CallbackQueryHandler(button_handler))
-dispatcher.add_handler(MessageHandler(Filters.document | Filters.video | Filters.audio | Filters.photo, file_upload_handler))
+async def main():
+    bot_token = "7883838296:AAEbNXZVmiA9GlUsqtKGWhrk-Bs5OTQOmVI"
+    app = Application.builder().token(bot_token).build()
+    
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, check_password))
+    app.add_handler(MessageHandler(filters.Document | filters.Video | filters.Audio | filters.Photo, file_upload_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, add_group))
+
+    print("Bot is running...")
+    app.run_polling()
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8443)
+    import asyncio
+    asyncio.run(main())
