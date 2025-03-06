@@ -57,7 +57,8 @@ async def webhook_setup():
 async def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.Document | filters.PHOTO | filters.AUDIO, file_upload_handler))
+    app.add_handler(MessageHandler(filters.Document | filters.Photo | filters.Audio, file_upload_handler))
+
     app.add_handler(CallbackQueryHandler(button_handler))
     logger.info("Bot is running...")
     await app.run_polling()
