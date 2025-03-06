@@ -11,7 +11,7 @@ from telegram.ext import (
     CallbackContext,
 )
 
-# Load environment variables from .env file
+# Load environment variables
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 WEBHOOK_URL = os.getenv("RENDER_WEBHOOK_URL")
@@ -23,13 +23,13 @@ if not TOKEN or not WEBHOOK_URL:
 # Initialize the bot application
 app = Application.builder().token(TOKEN).build()
 
-# Global dictionaries for session and group data
-user_sessions = {}  # To track user steps (upload, password, etc.)
+# Global dictionaries to track user sessions and group data
+user_sessions = {}  # e.g., { chat_id: { "step": "waiting_for_file", ... } }
 group_data = {}     # To store group details for file operations
 
-# ============== Command and Callback Handlers ==============
+# ======================= Command and Callback Handlers =======================
 
-# /start command shows the main menu
+# /start command: show main menu
 async def start(update: Update, context: CallbackContext):
     keyboard = [
         [InlineKeyboardButton("📤 Upload File", callback_data="upload")],
@@ -39,23 +39,26 @@ async def start(update: Update, context: CallbackContext):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("🔹 Select an option:", reply_markup=reply_markup)
 
-# Initiates file upload process
+# Initiate upload process
 async def upload_file(update: Update, context: CallbackContext):
     query = update.callback_query
     await query.answer()
     await query.message.reply_text("📂 Send the file you want to upload.")
     user_sessions[query.message.chat_id] = {"step": "waiting_for_file"}
 
-# Receives the file and asks for group selection
+# Receive file and ask for group selection
 async def receive_file(update: Update, context: CallbackContext):
     user_id = update.message.chat_id
-    # Check if user is in upload file step
     if user_id not in user_sessions or user_sessions[user_id].get("step") != "waiting_for_file":
         return
 
     file = update.message.document or update.message.video or update.message.audio or update.message.photo[-1]
-    file_type = "document" if update.message.document else "video" if update.message.video else "audio" if update.message.audio else "photo"
-    
+    file_type = (
+        "document" if update.message.document
+        else "video" if update.message.video
+        else "audio" if update.message.audio
+        else "photo"
+    )
     user_sessions[user_id] = {
         "step": "waiting_for_group",
         "file": file,
@@ -63,7 +66,7 @@ async def receive_file(update: Update, context: CallbackContext):
     }
     await update.message.reply_text("📌 Select the group/topic to upload to.")
 
-# Dummy fetch file handler
+# Dummy fetch file handler (to be implemented)
 async def fetch_file(update: Update, context: CallbackContext):
     query = update.callback_query
     await query.answer()
@@ -71,18 +74,21 @@ async def fetch_file(update: Update, context: CallbackContext):
         await query.message.reply_text("❌ No files found.")
         return
 
-    keyboard = [[InlineKeyboardButton(f"{group}", callback_data=f"fetch_{group}")] for group in group_data]
+    keyboard = [
+        [InlineKeyboardButton(f"{group}", callback_data=f"fetch_{group}")]
+        for group in group_data
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.message.reply_text("📂 Choose a group:", reply_markup=reply_markup)
 
-# Settings menu: asks for password
+# Settings: ask for password
 async def settings(update: Update, context: CallbackContext):
     query = update.callback_query
     await query.answer()
     await query.message.reply_text("🔑 Enter password to access settings.")
     user_sessions[query.message.chat_id] = {"step": "waiting_for_password"}
 
-# Verifies the provided password
+# Verify password for settings access
 async def verify_password(update: Update, context: CallbackContext):
     user_id = update.message.chat_id
     if user_id not in user_sessions or user_sessions[user_id].get("step") != "waiting_for_password":
@@ -105,6 +111,7 @@ async def verify_password(update: Update, context: CallbackContext):
 async def button_handler(update: Update, context: CallbackContext):
     query = update.callback_query
     await query.answer()
+
     if query.data == "upload":
         await upload_file(update, context)
     elif query.data == "fetch":
@@ -112,18 +119,22 @@ async def button_handler(update: Update, context: CallbackContext):
     elif query.data == "settings":
         await settings(update, context)
 
-# ============== Register Handlers ==============
+# ======================= Register Handlers =======================
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(button_handler))
-# Use uppercase constants for filters:
-app.add_handler(MessageHandler(filters.DOCUMENT | filters.VIDEO | filters.AUDIO | filters.PHOTO, receive_file))
+# Use correct filters:
+app.add_handler(MessageHandler(
+    filters.Document.ALL | filters.Video.ALL | filters.Audio.ALL | filters.Photo, 
+    receive_file)
+)
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, verify_password))
 
-# ============== Main Function: Webhook Setup and Run ==============
+# ======================= Main Function: Webhook Setup and Run =======================
 async def main():
     print("🚀 Bot is starting...")
-    # Set webhook for Render deployment
+    # Set webhook (this sets the URL where Telegram will send updates)
     await app.bot.set_webhook(WEBHOOK_URL)
+    # Run the webhook listener on the specified port
     await app.run_webhook(
         listen="0.0.0.0",
         port=8443,
@@ -131,7 +142,7 @@ async def main():
         webhook_url=WEBHOOK_URL
     )
 
-# ============== Correct Event Loop Handling ==============
+# ======================= Correct Event Loop Handling =======================
 if __name__ == "__main__":
     try:
         asyncio.run(main())
