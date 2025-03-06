@@ -38,7 +38,7 @@ async def file_upload_handler(update: Update, context):
 
 # Main function
 def main():
-    app = Application.builder().token("YOUR_BOT_TOKEN").build()
+    app = Application.builder().token("7883838296:AAEbNXZVmiA9GlUsqtKGWhrk-Bs5OTQOmVI").build()
 
     # Add handlers
     app.add_handler(CommandHandler("start", start))
