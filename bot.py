@@ -1,5 +1,6 @@
 import os
 import asyncio
+import nest_asyncio
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -10,6 +11,9 @@ from telegram.ext import (
     filters,
     CallbackContext,
 )
+
+# Apply nest_asyncio to allow nested event loops
+nest_asyncio.apply()
 
 # Load environment variables from .env file
 load_dotenv()
@@ -106,7 +110,7 @@ async def verify_password(update: Update, context: CallbackContext):
         await update.message.reply_text("❌ Incorrect password!")
     user_sessions[user_id]["step"] = None
 
-# Handle callback queries
+# Handle callback queries from buttons
 async def button_handler(update: Update, context: CallbackContext):
     query = update.callback_query
     await query.answer()
@@ -120,7 +124,7 @@ async def button_handler(update: Update, context: CallbackContext):
 # ======================= Register Handlers =======================
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(button_handler))
-# Use filters to capture all media types
+# Use filters for media files: documents, videos, audio, and photos.
 app.add_handler(MessageHandler(
     filters.Document.ALL | filters.VIDEO | filters.AUDIO | filters.PHOTO,
     receive_file
@@ -138,13 +142,13 @@ async def main():
         webhook_url=WEBHOOK_URL
     )
 
-# ======================= Run the Bot with Correct Event Loop Handling =======================
+# ======================= Run the Bot =======================
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except RuntimeError as e:
+        # If the event loop is already running, schedule main() in the current loop.
         if "already running" in str(e):
-            # If an event loop is already running, schedule the main coroutine and run forever.
             loop = asyncio.get_event_loop()
             loop.create_task(main())
             loop.run_forever()
