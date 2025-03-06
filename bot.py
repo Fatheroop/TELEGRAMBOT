@@ -11,11 +11,11 @@ from telegram.ext import (
     CallbackContext,
 )
 
-# Load environment variables
+# Load environment variables from .env file
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 WEBHOOK_URL = os.getenv("RENDER_WEBHOOK_URL")
-ADMIN_PASSWORD = "12345"  # Default password
+ADMIN_PASSWORD = "12345"  # Default admin password
 
 if not TOKEN or not WEBHOOK_URL:
     raise ValueError("Error: TELEGRAM_BOT_TOKEN or RENDER_WEBHOOK_URL is missing in .env file!")
@@ -23,9 +23,9 @@ if not TOKEN or not WEBHOOK_URL:
 # Initialize the bot application
 app = Application.builder().token(TOKEN).build()
 
-# Global dictionaries to track user sessions and group data
+# Global dictionaries for user sessions and group data
 user_sessions = {}  # e.g., { chat_id: { "step": "waiting_for_file", ... } }
-group_data = {}     # To store group details for file operations
+group_data = {}     # To store group details for file operations (dummy implementation)
 
 # ======================= Command and Callback Handlers =======================
 
@@ -39,7 +39,7 @@ async def start(update: Update, context: CallbackContext):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("🔹 Select an option:", reply_markup=reply_markup)
 
-# Initiate upload process
+# Initiate file upload process
 async def upload_file(update: Update, context: CallbackContext):
     query = update.callback_query
     await query.answer()
@@ -73,11 +73,8 @@ async def fetch_file(update: Update, context: CallbackContext):
     if not group_data:
         await query.message.reply_text("❌ No files found.")
         return
-
-    keyboard = [
-        [InlineKeyboardButton(f"{group}", callback_data=f"fetch_{group}")]
-        for group in group_data
-    ]
+    keyboard = [[InlineKeyboardButton(f"{group}", callback_data=f"fetch_{group}")]
+                for group in group_data]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.message.reply_text("📂 Choose a group:", reply_markup=reply_markup)
 
@@ -88,7 +85,7 @@ async def settings(update: Update, context: CallbackContext):
     await query.message.reply_text("🔑 Enter password to access settings.")
     user_sessions[query.message.chat_id] = {"step": "waiting_for_password"}
 
-# Verify password for settings access
+# Verify the provided password for settings access
 async def verify_password(update: Update, context: CallbackContext):
     user_id = update.message.chat_id
     if user_id not in user_sessions or user_sessions[user_id].get("step") != "waiting_for_password":
@@ -107,11 +104,10 @@ async def verify_password(update: Update, context: CallbackContext):
         await update.message.reply_text("❌ Incorrect password!")
     user_sessions[user_id]["step"] = None
 
-# Handle callback queries from buttons
+# Handle button callbacks
 async def button_handler(update: Update, context: CallbackContext):
     query = update.callback_query
     await query.answer()
-
     if query.data == "upload":
         await upload_file(update, context)
     elif query.data == "fetch":
@@ -122,19 +118,16 @@ async def button_handler(update: Update, context: CallbackContext):
 # ======================= Register Handlers =======================
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(button_handler))
-# Use correct filters:
-app.add_handler(MessageHandler(
-    filters.Document.ALL | filters.Video.ALL | filters.Audio.ALL | filters.Photo, 
-    receive_file)
-)
+# Use filters.MEDIA to capture all media types (documents, videos, audios, photos)
+app.add_handler(MessageHandler(filters.MEDIA, receive_file))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, verify_password))
 
 # ======================= Main Function: Webhook Setup and Run =======================
 async def main():
     print("🚀 Bot is starting...")
-    # Set webhook (this sets the URL where Telegram will send updates)
+    # Set webhook for Render deployment
     await app.bot.set_webhook(WEBHOOK_URL)
-    # Run the webhook listener on the specified port
+    # Run webhook listener
     await app.run_webhook(
         listen="0.0.0.0",
         port=8443,
@@ -142,9 +135,6 @@ async def main():
         webhook_url=WEBHOOK_URL
     )
 
-# ======================= Correct Event Loop Handling =======================
+# ======================= Run the Bot =======================
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("🛑 Bot stopped manually.")
+    asyncio.run(main())
