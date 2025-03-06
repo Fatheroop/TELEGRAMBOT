@@ -1,100 +1,138 @@
 import os
 import asyncio
-import logging
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    MessageHandler,
-    filters,
+    Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, CallbackContext
 )
 
 # Load environment variables
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 WEBHOOK_URL = os.getenv("RENDER_WEBHOOK_URL")
+ADMIN_PASSWORD = "12345"  # Default password
 
-# Logging setup
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+# Ensure required environment variables exist
+if not TOKEN or not WEBHOOK_URL:
+    raise ValueError("Error: TELEGRAM_BOT_TOKEN or RENDER_WEBHOOK_URL is missing in .env file!")
 
-# Password for settings
-SETTINGS_PASSWORD = "12345"
-user_states = {}
+# Initialize bot
+app = Application.builder().token(TOKEN).build()
 
-# Start command
-async def start(update: Update, context):
-    await update.message.reply_text("Welcome! Use /menu to access options.")
+# Global variables
+user_sessions = {}  # Store user actions (e.g., file upload steps)
+group_data = {}  # Store group details for uploading and fetching files
 
-# Main menu
-async def menu(update: Update, context):
+
+# **1️⃣ Command: Start**
+async def start(update: Update, context: CallbackContext):
     keyboard = [
         [InlineKeyboardButton("📤 Upload File", callback_data="upload")],
         [InlineKeyboardButton("📥 Fetch File", callback_data="fetch")],
-        [InlineKeyboardButton("⚙ Settings", callback_data="settings")],
+        [InlineKeyboardButton("⚙️ Settings", callback_data="settings")]
     ]
-    await update.message.reply_text("Choose an option:", reply_markup=InlineKeyboardMarkup(keyboard))
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("🔹 Select an option:", reply_markup=reply_markup)
 
-# Upload file handler
-async def file_upload_handler(update: Update, context):
-    file = update.message.document or update.message.video or update.message.audio or update.message.photo
-    if file:
-        await update.message.reply_text(f"File received: {file.file_id}")
 
-# Fetch file (dummy example)
-async def fetch_file(update: Update, context):
-    await update.callback_query.message.reply_text("Fetching file... (Feature in progress)")
-
-# Settings menu
-async def settings(update: Update, context):
+# **2️⃣ Upload File Process**
+async def upload_file(update: Update, context: CallbackContext):
     query = update.callback_query
-    await query.message.reply_text("Enter password to access settings:")
-    user_states[query.from_user.id] = "awaiting_password"
+    await query.answer()
+    await query.message.reply_text("📂 Send the file you want to upload.")
+    user_sessions[query.message.chat_id] = {"step": "waiting_for_file"}
 
-# Password verification
-async def password_check(update: Update, context):
-    user_id = update.message.from_user.id
-    if user_states.get(user_id) == "awaiting_password":
-        if update.message.text == SETTINGS_PASSWORD:
-            keyboard = [
-                [InlineKeyboardButton("➕ Add Bot", callback_data="add_bot")],
-                [InlineKeyboardButton("➖ Remove Bot", callback_data="remove_bot")],
-                [InlineKeyboardButton("🔄 Change Password", callback_data="change_password")],
-            ]
-            await update.message.reply_text("Settings unlocked:", reply_markup=InlineKeyboardMarkup(keyboard))
-        else:
-            await update.message.reply_text("Incorrect password! Try again.")
-        user_states[user_id] = None
 
-# Webhook setup
-async def set_webhook():
-    app = Application.builder().token(TOKEN).build()
-    await app.bot.set_webhook(url=WEBHOOK_URL)
-    logger.info(f"Webhook set to: {WEBHOOK_URL}")
+# **3️⃣ Receive File and Ask for Group**
+async def receive_file(update: Update, context: CallbackContext):
+    user_id = update.message.chat_id
 
-# Main function
-async def main():
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("menu", menu))
-    app.add_handler(CallbackQueryHandler(fetch_file, pattern="fetch"))
-    app.add_handler(CallbackQueryHandler(settings, pattern="settings"))
-    app.add_handler(MessageHandler(filters.TEXT, password_check))
-    app.add_handler(MessageHandler(filters.ATTACHMENT, file_upload_handler))
+    if user_id not in user_sessions or user_sessions[user_id]["step"] != "waiting_for_file":
+        return
+
+    file = update.message.document or update.message.video or update.message.audio or update.message.photo[-1]
+    file_type = "document" if update.message.document else "video" if update.message.video else "audio" if update.message.audio else "photo"
     
-    # Start webhook
-    logger.info("Bot is running...")
+    user_sessions[user_id] = {
+        "step": "waiting_for_group",
+        "file": file,
+        "file_type": file_type
+    }
+    await update.message.reply_text("📌 Select the group/topic to upload to.")
+
+
+# **4️⃣ Fetch File**
+async def fetch_file(update: Update, context: CallbackContext):
+    query = update.callback_query
+    await query.answer()
+
+    if not group_data:
+        await query.message.reply_text("❌ No files found.")
+        return
+
+    keyboard = [[InlineKeyboardButton(f"{group}", callback_data=f"fetch_{group}")] for group in group_data]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.message.reply_text("📂 Choose a group:", reply_markup=reply_markup)
+
+
+# **5️⃣ Settings (Password Protected)**
+async def settings(update: Update, context: CallbackContext):
+    query = update.callback_query
+    await query.answer()
+    await query.message.reply_text("🔑 Enter password to access settings.")
+    user_sessions[query.message.chat_id] = {"step": "waiting_for_password"}
+
+
+# **6️⃣ Password Verification**
+async def verify_password(update: Update, context: CallbackContext):
+    user_id = update.message.chat_id
+
+    if user_id not in user_sessions or user_sessions[user_id]["step"] != "waiting_for_password":
+        return
+
+    if update.message.text == ADMIN_PASSWORD:
+        keyboard = [
+            [InlineKeyboardButton("➕ Add Bot", callback_data="add_bot")],
+            [InlineKeyboardButton("➖ Remove Bot", callback_data="remove_bot")],
+            [InlineKeyboardButton("🔧 Manage Groups", callback_data="manage_groups")],
+            [InlineKeyboardButton("🔑 Change Password", callback_data="change_password")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("⚙️ Settings Menu:", reply_markup=reply_markup)
+    else:
+        await update.message.reply_text("❌ Incorrect password!")
+
+
+# **7️⃣ Handle Callback Queries**
+async def button_handler(update: Update, context: CallbackContext):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "upload":
+        await upload_file(update, context)
+    elif query.data == "fetch":
+        await fetch_file(update, context)
+    elif query.data == "settings":
+        await settings(update, context)
+
+
+# **✅ Register Handlers**
+app.add_handler(CommandHandler("start", start))
+app.add_handler(MessageHandler(filters.Document.ALL | filters.Video | filters.Audio | filters.Photo, receive_file))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, verify_password))
+app.add_handler(CallbackQueryHandler(button_handler))
+
+
+# **🚀 Start the Bot**
+async def main():
+    print("🚀 Bot is starting...")
+    await app.bot.set_webhook(WEBHOOK_URL)
     await app.run_webhook(listen="0.0.0.0", port=8443, url_path=TOKEN, webhook_url=WEBHOOK_URL)
 
-# Start bot with correct event loop
+
+# **🛠️ Run Event Loop Properly**
 if __name__ == "__main__":
     try:
-        asyncio.get_event_loop().run_until_complete(main())
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(main())
+        asyncio.run(main())  # Ensures proper async execution
+    except KeyboardInterrupt:
+        print("🛑 Bot stopped manually.")
