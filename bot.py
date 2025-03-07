@@ -26,6 +26,7 @@ BATCH_SELECT_TARGET_B = 103
 ADD_PRIV_CHOICE = 210
 ADD_PRIV_FORWARD = 211
 ADD_PRIV_ID = 212
+ADD_PRIV_CUSTOMNAME = 213
 
 # File to persist attached chats
 GROUPS_FILE = "groups.json"
@@ -50,26 +51,57 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- Basic Commands ---
+# --- Helper: Main Menu Inline Keyboard ---
+def get_main_menu_keyboard():
+    buttons = [
+        [InlineKeyboardButton("Send File", callback_data="menu_sendfile"),
+         InlineKeyboardButton("Batch Send", callback_data="menu_batchsend")],
+        [InlineKeyboardButton("Retrieve Media", callback_data="menu_retrievemedia")],
+        [InlineKeyboardButton("Add Group", callback_data="menu_addgroup"),
+         InlineKeyboardButton("Add Private Channel", callback_data="menu_addprivatechannel")],
+        [InlineKeyboardButton("List Groups", callback_data="menu_listgroups")]
+    ]
+    return InlineKeyboardMarkup(buttons)
 
+async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Send a main menu message as a permanent placeholder.
+    if update.effective_message:
+        await update.effective_message.reply_text("Main Menu:", reply_markup=get_main_menu_keyboard())
+    elif update.callback_query:
+        await update.callback_query.message.reply_text("Main Menu:", reply_markup=get_main_menu_keyboard())
+
+# --- Main Menu Handler (for buttons) ---
+async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    if data == "menu_sendfile":
+        await sendfile_command(update, context)
+    elif data == "menu_batchsend":
+        await batchsend_command(update, context)
+    elif data == "menu_retrievemedia":
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Please send the Telegram hyperlink for media retrieval (format: https://t.me/c/<chatid>/<message_id>)."
+        )
+    elif data == "menu_addgroup":
+        await addgroup(update, context)
+    elif data == "menu_addprivatechannel":
+        await addprivatechannel_start(update, context)
+    elif data == "menu_listgroups":
+        await listgroups(update, context)
+    else:
+        await query.edit_message_text("Invalid selection.")
+
+# --- /start command ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    help_text = (
-        "Welcome!\n\n"
-        "Commands:\n"
-        "/sendfile - Send a file with selected targets (single send).\n"
-        "/batchsend - Batch send files: first collect files, then set a prefix for each, then select targets.\n"
-        "/retrievemedia - Given a Telegram message hyperlink, retrieve its media.\n"
-        "/addgroup - Register this chat (group, public channel, or private chat) as attached.\n"
-        "/addprivatechannel - Add a private channel (choose to forward a message or manually enter channel ID).\n"
-        "/listgroups - List all attached chats.\n\n"
-        "How to connect chats:\n"
-        "1. For groups or public channels, add the bot and use /addgroup.\n"
-        "2. For private channels, either forward a message from the channel or use /addprivatechannel to enter the channel ID manually.\n"
-        "3. Use /listgroups to view attached chats."
+    text = (
+        "Welcome to the Bot with a Persistent Main Menu!\n\n"
+        "Use the menu below to choose an option."
     )
-    await update.effective_message.reply_text(help_text)
+    await update.effective_message.reply_text(text, reply_markup=get_main_menu_keyboard())
 
-# --- /addgroup (for normal groups/public channels) ---
+# --- /addgroup (for groups/public channels) ---
 async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
     groups = load_groups()
@@ -81,21 +113,16 @@ async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         groups[chat_id] = chat_title
         save_groups(groups)
         await update.effective_message.reply_text(f"Chat '{chat_title}' added successfully.")
+    await show_main_menu(update, context)
 
 # --- /addprivatechannel conversation ---
 async def addprivatechannel_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # Offer two methods: forward a message or enter channel ID manually.
     buttons = [
-        [
-            InlineKeyboardButton("Forward Message", callback_data="addPriv_forward"),
-            InlineKeyboardButton("Enter Channel ID", callback_data="addPriv_id"),
-        ]
+        [InlineKeyboardButton("Forward Message", callback_data="addPriv_forward"),
+         InlineKeyboardButton("Enter Channel ID", callback_data="addPriv_id")]
     ]
     reply_markup = InlineKeyboardMarkup(buttons)
-    await update.effective_message.reply_text(
-        "How would you like to add your private channel?",
-        reply_markup=reply_markup
-    )
+    await update.effective_message.reply_text("How would you like to add your private channel?", reply_markup=reply_markup)
     return ADD_PRIV_CHOICE
 
 async def addprivatechannel_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -114,7 +141,6 @@ async def addprivatechannel_choice(update: Update, context: ContextTypes.DEFAULT
 
 async def addprivatechannel_forward(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     msg = update.effective_message
-    # Check if the forwarded message contains channel info.
     if msg.forward_from_chat and msg.forward_from_chat.type == "channel":
         channel = msg.forward_from_chat
         channel_id = str(channel.id)
@@ -126,30 +152,36 @@ async def addprivatechannel_forward(update: Update, context: ContextTypes.DEFAUL
             groups[channel_id] = channel_title
             save_groups(groups)
             await msg.reply_text(f"Private channel '{channel_title}' added successfully.")
+        await show_main_menu(update, context)
         return ConversationHandler.END
     else:
-        await msg.reply_text(
-            "That doesn't appear to be a forwarded message from a private channel.\n"
-            "Please forward a valid message from your private channel, or type /cancel."
-        )
+        await msg.reply_text("That doesn't seem to be a forwarded message from a private channel. Please forward a valid message or type /cancel.")
         return ADD_PRIV_FORWARD
 
 async def addprivatechannel_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     msg = update.effective_message
     text = msg.text.strip() if msg.text else ""
     if not text.startswith("-100"):
-        await msg.reply_text("The channel ID should usually start with -100. Please try again or type /cancel.")
+        await msg.reply_text("Channel ID should start with -100. Please try again or type /cancel.")
         return ADD_PRIV_ID
-    channel_id = text
+    context.user_data["new_channel_id"] = text
+    await msg.reply_text("Please enter a custom name for this channel, or type '-' to use the default.")
+    return ADD_PRIV_CUSTOMNAME
+
+async def addprivatechannel_customname(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    msg = update.effective_message
+    custom_name = msg.text.strip() if msg.text else ""
+    channel_id = context.user_data.get("new_channel_id")
+    if not channel_id:
+        await msg.reply_text("Channel ID missing. Please try /addprivatechannel again.")
+        return ConversationHandler.END
     groups = load_groups()
-    if channel_id in groups:
-        await msg.reply_text(f"Private channel '{groups[channel_id]}' is already attached.")
-    else:
-        # Use a placeholder title since we don't have channel details.
-        placeholder_title = "PrivateChannel_" + channel_id
-        groups[channel_id] = placeholder_title
-        save_groups(groups)
-        await msg.reply_text(f"Private channel '{placeholder_title}' added successfully.")
+    if custom_name == "-" or custom_name == "":
+        custom_name = "PrivateChannel_" + channel_id
+    groups[channel_id] = custom_name
+    save_groups(groups)
+    await msg.reply_text(f"Private channel '{custom_name}' added successfully.")
+    await show_main_menu(update, context)
     return ConversationHandler.END
 
 # --- /listgroups ---
@@ -162,6 +194,7 @@ async def listgroups(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         for chat_id, title in groups.items():
             msg += f"- {title} (ID: {chat_id})\n"
         await update.effective_message.reply_text(msg)
+    await show_main_menu(update, context)
 
 # --- /retrievemedia ---
 async def retrievemedia(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -170,7 +203,7 @@ async def retrievemedia(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     pattern = r"https://t\.me/c/(\d+)/(\d+)"
     match = re.search(pattern, text)
     if not match:
-        await msg.reply_text("No valid Telegram message hyperlink found. Use format: https://t.me/c/<chatid>/<message_id>")
+        await msg.reply_text("No valid Telegram hyperlink found. Use format: https://t.me/c/<chatid>/<message_id>")
         return
     chat_part, message_id_str = match.groups()
     try:
@@ -188,6 +221,7 @@ async def retrievemedia(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await msg.reply_text("Media retrieved and forwarded below.")
     except Exception as e:
         await msg.reply_text(f"Error retrieving media: {e}")
+    await show_main_menu(update, context)
 
 # --- /sendfile conversation (single file send) ---
 async def sendfile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -325,14 +359,13 @@ async def select_target_b(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.message.reply_text(f"Error sending hyperlink message to Target B: {e}")
         return ConversationHandler.END
     await query.message.reply_text("File forwarded and hyperlink message sent successfully!")
+    await show_main_menu(update, context)
     return ConversationHandler.END
 
 # --- /batchsend conversation (optimized) ---
 async def batchsend_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["files"] = []
-    await update.effective_message.reply_text(
-        "Batch Send: Please send me the files one by one. When finished, type /done."
-    )
+    await update.effective_message.reply_text("Batch Send: Please send the files one by one. When finished, type /done.")
     return BATCH_COLLECT
 
 async def batch_collect_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -393,9 +426,7 @@ async def batch_receive_prefix(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data["current_index"] = index
     if index < len(files):
         next_file = files[index]
-        await msg.reply_text(
-            f"Batch Send: For file {index+1} ({next_file['file_name']}), please provide a prefix (send '-' to use default)."
-        )
+        await msg.reply_text(f"Batch Send: For file {index+1} ({next_file['file_name']}), please provide a prefix (send '-' to use default).")
         return BATCH_GET_PREFIX
     else:
         buttons = []
@@ -481,6 +512,7 @@ async def batch_select_target_b(update: Update, context: ContextTypes.DEFAULT_TY
         except Exception as e:
             results.append(f"File {idx} error: {e}")
     await query.message.reply_text("Batch Send Completed:\n" + "\n".join(results))
+    await show_main_menu(update, context)
     return ConversationHandler.END
 
 # --- Main function ---
@@ -492,6 +524,15 @@ def main():
 
     application = Application.builder().token(BOT_TOKEN).build()
 
+    # Main menu handler (for buttons)
+    application.add_handler(CallbackQueryHandler(main_menu_handler, pattern="^menu_"))
+
+    # /start handler
+    application.add_handler(CommandHandler("start", start))
+
+    # /addgroup handler
+    application.add_handler(CommandHandler("addgroup", addgroup))
+
     # /addprivatechannel conversation handler
     addprivatechannel_conv = ConversationHandler(
         entry_points=[CommandHandler("addprivatechannel", addprivatechannel_start)],
@@ -499,14 +540,24 @@ def main():
             ADD_PRIV_CHOICE: [CallbackQueryHandler(addprivatechannel_choice)],
             ADD_PRIV_FORWARD: [MessageHandler(filters.ALL & ~filters.COMMAND, addprivatechannel_forward)],
             ADD_PRIV_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, addprivatechannel_id)],
+            ADD_PRIV_CUSTOMNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, addprivatechannel_customname)],
         },
         fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
     )
     application.add_handler(addprivatechannel_conv)
 
-    # /sendfile conversation handler
+    # /listgroups handler
+    application.add_handler(CommandHandler("listgroups", listgroups))
+
+    # /retrievemedia handler
+    application.add_handler(CommandHandler("retrievemedia", retrievemedia))
+
+    # /sendfile conversation handler (with main menu entry)
     sendfile_conv = ConversationHandler(
-        entry_points=[CommandHandler("sendfile", sendfile_command)],
+        entry_points=[
+            CommandHandler("sendfile", sendfile_command),
+            CallbackQueryHandler(lambda u, c: sendfile_command(u, c), pattern="^menu_sendfile$")
+        ],
         states={
             GET_FILE: [MessageHandler(filters.ALL & ~filters.COMMAND, receive_file)],
             GET_PREFIX: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_prefix)],
@@ -517,9 +568,12 @@ def main():
     )
     application.add_handler(sendfile_conv)
 
-    # /batchsend conversation handler
+    # /batchsend conversation handler (with main menu entry)
     batchsend_conv = ConversationHandler(
-        entry_points=[CommandHandler("batchsend", batchsend_command)],
+        entry_points=[
+            CommandHandler("batchsend", batchsend_command),
+            CallbackQueryHandler(lambda u, c: batchsend_command(u, c), pattern="^menu_batchsend$")
+        ],
         states={
             BATCH_COLLECT: [
                 MessageHandler(filters.ALL & ~filters.COMMAND, batch_collect_file),
@@ -533,11 +587,11 @@ def main():
     )
     application.add_handler(batchsend_conv)
 
-    # Other commands
-    application.add_handler(CommandHandler("retrievemedia", retrievemedia))
-    application.add_handler(CommandHandler("addgroup", addgroup))
-    application.add_handler(CommandHandler("listgroups", listgroups))
-    application.add_handler(CommandHandler("start", start))
+    # Also allow the main menu to trigger /retrievemedia, /addgroup, etc.
+    application.add_handler(CallbackQueryHandler(lambda u, c: retrievemedia(u, c), pattern="^menu_retrievemedia$"))
+    application.add_handler(CallbackQueryHandler(lambda u, c: addgroup(u, c), pattern="^menu_addgroup$"))
+    application.add_handler(CallbackQueryHandler(lambda u, c: addprivatechannel_start(u, c), pattern="^menu_addprivatechannel$"))
+    application.add_handler(CallbackQueryHandler(lambda u, c: listgroups(u, c), pattern="^menu_listgroups$"))
 
     WEBHOOK_URL = os.getenv("WEBHOOK_URL")
     if WEBHOOK_URL:
