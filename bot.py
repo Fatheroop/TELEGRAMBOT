@@ -77,8 +77,9 @@ def format_duration(seconds):
         return f"{m:02d}:{s:02d}"
 
 # ----- Logging -----
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-                    level=logging.INFO)
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
 # ----- Global Message Logger for TOC -----
@@ -114,7 +115,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/changepassword <old> <new> – Change password\n"
         "/addgroup – Add current chat to group list\n"
         "/addprivatechannel <channel_id> [custom name] – Add a private channel manually\n"
-        "/toc – Get a Table of Contents of recent messages from a selected group\n"
+        "/toc – Get a Table of Contents from a selected group\n"
         "/batchsend – Batch send files\n"
         "/commands – Show command list"
     )
@@ -195,13 +196,17 @@ async def toc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     if not groups:
         await update.effective_message.reply_text("No groups available. Use /addgroup to add one.")
         return ConversationHandler.END
-    buttons = [[InlineKeyboardButton(title, callback_data=f"toc_group:{chat_id}")]
-               for chat_id, title in groups.items()]
+    buttons = [
+        [InlineKeyboardButton(title, callback_data=f"toc_group:{chat_id}")]
+        for chat_id, title in groups.items()
+    ]
     await update.effective_message.reply_text("Select a group for TOC:", reply_markup=InlineKeyboardMarkup(buttons))
+    logger.info("TOC command sent inline keyboard")
     return TOC_CHOOSE
 
 @require_login
 async def toc_select_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    logger.info("Received TOC callback")
     query = update.callback_query
     await query.answer()
     group_id = query.data.split("toc_group:")[1]
@@ -210,9 +215,13 @@ async def toc_select_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         text = "No messages logged for this group."
     else:
         link_id = group_id[4:] if group_id.startswith("-100") else group_id
-        lines = [f"[Msg {m['message_id']}: {m['snippet']}](https://t.me/c/{link_id}/{m['message_id']})" for m in msgs]
+        lines = [
+            f"[Msg {m['message_id']}: {m['snippet']}](https://t.me/c/{link_id}/{m['message_id']})"
+            for m in msgs
+        ]
         text = "\n".join(lines)
     await query.message.reply_text(text, disable_web_page_preview=True)
+    logger.info("TOC callback finished")
     return ConversationHandler.END
 
 # ----- BatchSend Conversation (Protected) -----
@@ -220,6 +229,7 @@ async def toc_select_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def batchsend_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["files"] = []
     await update.effective_message.reply_text("Batch Send: Send files one by one. When finished, type /done.")
+    logger.info("BatchSend command started")
     return BATCH_COLLECT
 
 @require_login
@@ -253,6 +263,7 @@ async def bs_collect_file(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "prefix": None
     })
     await msg.reply_text(f"File received. Total files: {len(context.user_data['files'])}. Send another file or type /done.")
+    logger.info(f"Collected file {file_name}")
     return BATCH_COLLECT
 
 @require_login
@@ -264,6 +275,7 @@ async def batch_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["current_index"] = 0
     current = files[0]
     await update.effective_message.reply_text(f"Batch Send: For file 1 ({current['file_name']}), enter a prefix (or '-' for default).")
+    logger.info("BatchSend done received; moving to prefix input")
     return BATCH_GET_PREFIX
 
 @require_login
@@ -281,13 +293,17 @@ async def bs_receive_prefix(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await msg.reply_text(f"Batch Send: For file {idx+1} ({next_file['file_name']}), enter a prefix (or '-' for default).")
         return BATCH_GET_PREFIX
     else:
-        buttons = [[InlineKeyboardButton(title, callback_data=f"bs_target:{chat_id}")]
-                   for chat_id, title in load_groups().items()]
+        buttons = [
+            [InlineKeyboardButton(title, callback_data=f"bs_target:{chat_id}")]
+            for chat_id, title in load_groups().items()
+        ]
         await msg.reply_text("Batch Send: Select target group to receive all messages:", reply_markup=InlineKeyboardMarkup(buttons))
+        logger.info("BatchSend prefix input completed; showing target groups")
         return BS_TARGET
 
 @require_login
 async def bs_select_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    logger.info("Received BatchSend target callback")
     query = update.callback_query
     await query.answer()
     target = query.data.split("bs_target:")[1]
@@ -326,6 +342,7 @@ async def bs_select_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         except Exception as e:
             results.append(f"File {i} error: {e}")
     await query.message.reply_text("Batch Send Completed:\n" + "\n".join(results))
+    logger.info("BatchSend process completed")
     return ConversationHandler.END
 
 # ----- Main Function -----
@@ -335,7 +352,7 @@ def main():
         logger.error("BOT_TOKEN not set.")
         return
     app = Application.builder().token(BOT_TOKEN).build()
-    
+
     # Public commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("commands", commands_list))
@@ -345,14 +362,14 @@ def main():
     app.add_handler(CommandHandler("addprivatechannel", addprivatechannel))
     app.add_handler(CommandHandler("listgroups", listgroups))
     
-    # ConversationHandlers will handle /toc and /batchsend
+    # ConversationHandlers for /toc and /batchsend (no duplicate command handlers)
     toc_conv = ConversationHandler(
         entry_points=[CommandHandler("toc", toc_command)],
         states={
             TOC_CHOOSE: [CallbackQueryHandler(toc_select_group, pattern=r"^toc_group:")]
         },
         fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
-        per_message=True
+        allow_reentry=True
     )
     app.add_handler(toc_conv)
     
@@ -367,18 +384,24 @@ def main():
             BS_TARGET: [CallbackQueryHandler(bs_select_target, pattern=r"^bs_target:")]
         },
         fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
-        per_message=True
+        allow_reentry=True
     )
     app.add_handler(bs_conv)
     
     # Log messages from groups for TOC
-    app.add_handler(MessageHandler((filters.ChatType.GROUPS | filters.ChatType.CHANNEL) & ~filters.COMMAND, log_messages))
+    app.add_handler(
+        MessageHandler((filters.ChatType.GROUPS | filters.ChatType.CHANNEL) & ~filters.COMMAND, log_messages)
+    )
     
     WEBHOOK_URL = os.getenv("WEBHOOK_URL")
     if WEBHOOK_URL:
         PORT = int(os.getenv("PORT", "8443"))
-        app.run_webhook(listen="0.0.0.0", port=PORT, url_path=BOT_TOKEN,
-                        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}")
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=BOT_TOKEN,
+            webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}"
+        )
     else:
         app.run_polling()
 
