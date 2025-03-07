@@ -1,7 +1,6 @@
 import os
 import json
 import logging
-import re
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     Application,
@@ -14,17 +13,11 @@ from telegram.ext import (
 )
 
 # ----- Conversation states for /batchsend -----
-BATCH_COLLECT, BATCH_GET_PREFIX, BS_TARGET_A, BS_TARGET_B = range(100, 104)
+BATCH_COLLECT, BATCH_GET_PREFIX, BS_TARGET = range(100, 103)
 
-# ----- Conversation state for /toc -----
-TOC_CHOOSE = 300
-
-# Files for persistent storage
+# ----- Files for persistent storage -----
 GROUPS_FILE = "groups.json"
 PASSWORD_FILE = "password.json"  # stores {"password": "admin"} by default
-
-# Global log for messages in groups (for TOC)
-chat_logs = {}  # {chat_id: [ { "message_id": ..., "snippet": ... }, ... ]}
 
 # ----- Utility Functions -----
 def load_groups():
@@ -80,28 +73,7 @@ logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ----- Global Message Logger for TOC -----
-async def log_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat = update.effective_chat
-    if chat.type not in ["group", "supergroup", "channel"]:
-        return
-    chat_id = str(chat.id)
-    msg = update.effective_message
-    if not msg:
-        return
-    snippet = (msg.text or "")[:30] or "Non-text"
-    entry = {"message_id": msg.message_id, "snippet": snippet}
-    if chat_id not in chat_logs:
-        chat_logs[chat_id] = []
-    chat_logs[chat_id].append(entry)
-    # Keep only last 100 messages
-    if len(chat_logs[chat_id]) > 100:
-        chat_logs[chat_id] = chat_logs[chat_id][-100:]
-
-# Add message logger handler with a low priority
-# (You might want to store logs only for non-command messages)
-    
-# ----- Authentication Decorator -----
+# ----- Authentication -----
 def require_login(func):
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not context.user_data.get("authenticated", False):
@@ -118,9 +90,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/login <password> – Log in (default: admin)\n"
         "/changepassword <old> <new> – Change password\n"
         "/addgroup – Add current chat to group list\n"
-        "/addprivatechannel <channel_id> [custom name] – Add a private channel\n"
-        "/toc – Get TOC (Table of Contents) of messages from a selected group\n"
-        "/batchsend – Batch send multiple files"
+        "/addprivatechannel <channel_id> [custom name] – Add a private channel manually\n"
+        "/listgroups – List attached chats\n"
+        "/batchsend – Batch send files\n"
+        "/commands – Show command list"
     )
     await update.effective_message.reply_text(text)
 
@@ -150,7 +123,6 @@ async def changepassword(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     save_password(args[1])
     await update.effective_message.reply_text("Password changed successfully.")
 
-# ----- /addgroup (Protected) -----
 @require_login
 async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
@@ -164,7 +136,6 @@ async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         save_groups(groups)
         await update.effective_message.reply_text(f"Chat '{chat_title}' added successfully.")
 
-# ----- /addprivatechannel (Protected, manual only) -----
 @require_login
 async def addprivatechannel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     args = context.args
@@ -184,40 +155,14 @@ async def addprivatechannel(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         save_groups(groups)
         await update.effective_message.reply_text(f"Private channel '{custom_name}' added successfully.")
 
-# ----- /toc (Protected) -----
 @require_login
-async def toc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def listgroups(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     groups = load_groups()
     if not groups:
         await update.effective_message.reply_text("No groups available. Use /addgroup to add one.")
-        return ConversationHandler.END
-    # Build inline buttons for each group
-    buttons = [[InlineKeyboardButton(title, callback_data=f"toc_group:{chat_id}")]
-               for chat_id, title in groups.items()]
-    await update.effective_message.reply_text("Select a group to get TOC (Table of Contents):", reply_markup=InlineKeyboardMarkup(buttons))
-    return TOC_CHOOSE
-
-async def toc_select_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    group_id = query.data.split("toc_group:")[1]
-    # Retrieve messages from chat_logs for that group
-    msgs = chat_logs.get(group_id, [])
-    if not msgs:
-        text = "No messages logged for this group."
     else:
-        # Build TOC: each line as a hyperlink to the message
-        if group_id.startswith("-100"):
-            link_id = group_id[4:]
-        else:
-            link_id = group_id
-        lines = []
-        for m in msgs:
-            line = f"[Msg {m['message_id']}: {m['snippet']}](https://t.me/c/{link_id}/{m['message_id']})"
-            lines.append(line)
-        text = "\n".join(lines)
-    await query.message.reply_text(text, disable_web_page_preview=True)
-    return ConversationHandler.END
+        text = "Available Groups:\n" + "\n".join(f"- {title} (ID: {chat_id})" for chat_id, title in groups.items())
+        await update.effective_message.reply_text(text)
 
 # ----- /batchsend Conversation (Protected) -----
 @require_login
@@ -244,7 +189,7 @@ async def bs_collect_file(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         file_info = msg.video
         file_type = "video"
         file_name = file_info.file_name if file_info.file_name else "video.mp4"
-        additional = str(file_info.duration)  # raw duration in seconds
+        additional = str(file_info.duration)  # duration in seconds as string
     else:
         await msg.reply_text("Unsupported file type. Send a document, photo, or video.")
         return BATCH_COLLECT
@@ -255,7 +200,7 @@ async def bs_collect_file(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "additional": additional,
         "prefix": None
     })
-    await msg.reply_text(f"File received. Total files: {len(context.user_data['files'])}. Send another file or type /done.")
+    await msg.reply_text(f"File received. Total: {len(context.user_data['files'])}. Send another file or type /done.")
     return BATCH_COLLECT
 
 async def batch_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -282,14 +227,14 @@ async def bs_receive_prefix(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await msg.reply_text(f"Batch Send: For file {idx+1} ({next_file['file_name']}), enter a prefix (or '-' for default).")
         return BATCH_GET_PREFIX
     else:
-        # Show inline buttons for target selection from attached chats
+        # Build inline buttons for target selection using attached groups
         groups = load_groups()
         if not groups:
-            await msg.reply_text("No attached chats available. Use /addgroup or /addprivatechannel.")
+            await msg.reply_text("No groups available. Use /addgroup or /addprivatechannel.")
             return ConversationHandler.END
         buttons = [[InlineKeyboardButton(title, callback_data=f"bs_target:{chat_id}")]
                    for chat_id, title in groups.items()]
-        await msg.reply_text("Batch Send: Select target chat to receive all messages:", reply_markup=InlineKeyboardMarkup(buttons))
+        await msg.reply_text("Batch Send: Select target group to receive all messages:", reply_markup=InlineKeyboardMarkup(buttons))
         return BS_TARGET_A
 
 async def bs_select_target_a(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -301,6 +246,7 @@ async def bs_select_target_a(update: Update, context: ContextTypes.DEFAULT_TYPE)
     results = []
     for i, fdict in enumerate(context.user_data.get("files", []), start=1):
         try:
+            # Forward the file to target
             if fdict["file_type"] == "document":
                 sent = await bot.send_document(
                     chat_id=target,
@@ -357,18 +303,8 @@ def main():
     # Protected commands
     app.add_handler(CommandHandler("addgroup", addgroup))
     app.add_handler(CommandHandler("addprivatechannel", addprivatechannel))
-    app.add_handler(CommandHandler("toc", toc_command))
+    app.add_handler(CommandHandler("listgroups", listgroups))
     app.add_handler(CommandHandler("batchsend", batchsend_command))
-
-    # /toc conversation
-    toc_conv = ConversationHandler(
-        entry_points=[CommandHandler("toc", toc_command)],
-        states={
-            TOC_CHOOSE: [CallbackQueryHandler(toc_select_group, pattern=r"^toc_group:")]
-        },
-        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
-    )
-    app.add_handler(toc_conv)
 
     # Batchsend conversation handler
     bs_conv = ConversationHandler(
@@ -379,14 +315,11 @@ def main():
                 CommandHandler("done", batch_done)
             ],
             BATCH_GET_PREFIX: [MessageHandler(filters.TEXT & ~filters.COMMAND, bs_receive_prefix)],
-            BS_TARGET_A: [CallbackQueryHandler(bs_select_target_a, pattern=r"^bs_target:")]
+            BS_TARGET_A: [CallbackQueryHandler(bs_select_target_a, pattern=r"^bs_target:")],
         },
         fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
     )
     app.add_handler(bs_conv)
-
-    # Log messages in group chats for TOC (low priority)
-    app.add_handler(MessageHandler(filters.ChatType(["group", "supergroup", "channel"]) & ~filters.COMMAND, log_messages))
 
     WEBHOOK_URL = os.getenv("WEBHOOK_URL")
     if WEBHOOK_URL:
