@@ -284,7 +284,7 @@ async def bs_receive_prefix(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         buttons = [[InlineKeyboardButton(title, callback_data=f"bs_target:{chat_id}")]
                    for chat_id, title in load_groups().items()]
         await msg.reply_text("Batch Send: Select target group to receive all messages:", reply_markup=InlineKeyboardMarkup(buttons))
-        return BS_TARGET_A
+        return BS_TARGET
 
 @require_login
 async def bs_select_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -367,7 +367,7 @@ def main():
                 CommandHandler("done", batch_done)
             ],
             BATCH_GET_PREFIX: [MessageHandler(filters.TEXT & ~filters.COMMAND, bs_receive_prefix)],
-            BS_TARGET_A: [CallbackQueryHandler(bs_select_target, pattern=r"^bs_target:")]
+            BS_TARGET: [CallbackQueryHandler(bs_select_target, pattern=r"^bs_target:")]
         },
         fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
     )
