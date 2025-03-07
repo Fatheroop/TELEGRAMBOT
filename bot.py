@@ -341,14 +341,11 @@ def main():
     app.add_handler(CommandHandler("commands", commands_list))
     app.add_handler(CommandHandler("login", login))
     app.add_handler(CommandHandler("changepassword", changepassword))
-    
-    # Protected commands
     app.add_handler(CommandHandler("addgroup", addgroup))
     app.add_handler(CommandHandler("addprivatechannel", addprivatechannel))
-    app.add_handler(CommandHandler("toc", toc_command))
-    app.add_handler(CommandHandler("batchsend", batchsend_command))
+    app.add_handler(CommandHandler("listgroups", listgroups))
     
-    # TOC conversation with per_message=True to track callback queries properly
+    # ConversationHandlers will handle /toc and /batchsend
     toc_conv = ConversationHandler(
         entry_points=[CommandHandler("toc", toc_command)],
         states={
@@ -359,7 +356,6 @@ def main():
     )
     app.add_handler(toc_conv)
     
-    # Batchsend conversation with per_message=True
     bs_conv = ConversationHandler(
         entry_points=[CommandHandler("batchsend", batchsend_command)],
         states={
