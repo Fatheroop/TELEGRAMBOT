@@ -13,16 +13,40 @@ from telegram.ext import (
     filters,
 )
 
-# ----- States for /sendfile conversation (single send) -----
+# ----- Helper functions for formatting -----
+def format_file_size(size_bytes):
+    if size_bytes is None:
+        return "Unknown"
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024*1024:
+        return f"{size_bytes/1024:.2f} KB"
+    elif size_bytes < 1024*1024*1024:
+        return f"{size_bytes/1024/1024:.2f} MB"
+    else:
+        return f"{size_bytes/1024/1024/1024:.2f} GB"
+
+def format_duration(seconds):
+    if seconds is None:
+        return ""
+    seconds = int(seconds)
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    s = seconds % 60
+    if h > 0:
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    else:
+        return f"{m:02d}:{s:02d}"
+
+# ----- Conversation states for /sendfile (single send) -----
 GET_FILE, GET_PREFIX, SF_TARGET_A, SF_TARGET_B = range(4)
 
 # ----- States for /batchsend conversation -----
 BATCH_COLLECT, BATCH_GET_PREFIX, BS_TARGET_A, BS_TARGET_B = range(100, 104)
 
-# File to store attached chats (groups and channels)
+# ----- File for storing attached chats -----
 GROUPS_FILE = "groups.json"
 
-# Utility functions
 def load_groups():
     try:
         with open(GROUPS_FILE, "r") as f:
@@ -125,7 +149,7 @@ async def retrievemedia(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except Exception as e:
         await msg.reply_text(f"Error retrieving media: {e}")
 
-# ----- /sendfile Conversation -----
+# ----- /sendfile Conversation (Single File Send) -----
 async def sendfile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.effective_message.reply_text("Sendfile: Please send the file (document, photo, or video).")
     return GET_FILE
@@ -148,7 +172,7 @@ async def sf_receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         file_info = msg.video
         file_type = "video"
         file_name = file_info.file_name if file_info.file_name else "video.mp4"
-        additional = f", duration: {file_info.duration}s"
+        additional = f"{file_info.duration}"  # duration in seconds; will be reformatted later
     else:
         await msg.reply_text("Unsupported file type. Send a document, photo, or video.")
         return GET_FILE
@@ -156,7 +180,7 @@ async def sf_receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "file_info": file_info,
         "file_type": file_type,
         "file_name": file_name,
-        "additional": additional
+        "raw_duration": file_info.duration if hasattr(file_info, "duration") else None
     })
     await msg.reply_text(f"Enter prefix for hyperlink (default: {file_name}). Type '-' for default.")
     return GET_PREFIX
@@ -170,7 +194,7 @@ async def sf_receive_prefix(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not groups:
         await msg.reply_text("No attached chats available. Use /addgroup or /addprivatechannel.")
         return ConversationHandler.END
-    # Show inline buttons for target selection
+    # Build inline buttons from attached chats
     buttons_a = [[InlineKeyboardButton(title, callback_data=f"sf_targetA:{chat_id}")]
                  for chat_id, title in groups.items()]
     await msg.reply_text("Select target chat for sending the file (Target A):", reply_markup=InlineKeyboardMarkup(buttons_a))
@@ -211,6 +235,7 @@ async def sf_select_target_b(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 video=context.user_data["file_info"].file_id,
                 caption="Forwarded video"
             )
+        # Build hyperlink from sent message
         chat_id = sent_msg.chat.id
         if isinstance(chat_id, int) and str(chat_id).startswith("-100"):
             link_chat = str(chat_id)[4:]
@@ -218,8 +243,14 @@ async def sf_select_target_b(update: Update, context: ContextTypes.DEFAULT_TYPE)
             link_chat = str(chat_id)
         msg_id = sent_msg.message_id
         hyperlink_url = f"https://t.me/c/{link_chat}/{msg_id}"
-        file_size = getattr(context.user_data["file_info"], "file_size", "Unknown")
-        suffix = f" (Size: {file_size} bytes{context.user_data.get('additional','')})"
+        size_bytes = getattr(context.user_data["file_info"], "file_size", None)
+        size_str = format_file_size(size_bytes) if size_bytes else "Unknown"
+        dur = context.user_data.get("raw_duration")
+        dur_str = format_duration(dur) if dur else ""
+        suffix = f" (Size: {size_str}"
+        if dur_str:
+            suffix += f", Duration: {dur_str}"
+        suffix += ")"
         hyperlink_text = f"{context.user_data.get('prefix')}{suffix}"
         hyperlink_msg = f"[{hyperlink_text}]({hyperlink_url})"
         await bot.send_message(chat_id=context.user_data["target_b"], text=hyperlink_msg, parse_mode="Markdown")
@@ -252,7 +283,7 @@ async def bs_collect_file(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         file_info = msg.video
         file_type = "video"
         file_name = file_info.file_name if file_info.file_name else "video.mp4"
-        additional = f", duration: {file_info.duration}s"
+        additional = f"{file_info.duration}"  # raw duration in seconds
     else:
         await msg.reply_text("Unsupported file type. Send a document, photo, or video.")
         return BATCH_COLLECT
@@ -263,7 +294,7 @@ async def bs_collect_file(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "additional": additional,
         "prefix": None
     })
-    await msg.reply_text(f"File received. Total files: {len(context.user_data['files'])}. Send another file or type /done.")
+    await msg.reply_text(f"File received. Total: {len(context.user_data['files'])}. Send another file or type /done.")
     return BATCH_COLLECT
 
 async def batch_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -290,13 +321,8 @@ async def bs_receive_prefix(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await msg.reply_text(f"Batch Send: For file {idx+1} ({next_file['file_name']}), enter a prefix (or '-' for default).")
         return BATCH_GET_PREFIX
     else:
-        # Use inline buttons for target selection
-        groups = load_groups()
-        if not groups:
-            await msg.reply_text("No attached chats available. Use /addgroup or /addprivatechannel.")
-            return ConversationHandler.END
         buttons_a = [[InlineKeyboardButton(title, callback_data=f"bs_targetA:{chat_id}")]
-                     for chat_id, title in groups.items()]
+                     for chat_id, title in load_groups().items()]
         await msg.reply_text("Batch Send: Select target chat for sending files (Target A):", reply_markup=InlineKeyboardMarkup(buttons_a))
         return BS_TARGET_A
 
@@ -344,10 +370,15 @@ async def bs_select_target_b(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 link_cid = str(cid)
             mid = sent.message_id
             hyperlink_url = f"https://t.me/c/{link_cid}/{mid}"
-            file_size = getattr(fdict["file_info"], "file_size", "Unknown")
-            suffix = f" (Size: {file_size} bytes{fdict.get('additional','')})"
-            prefix_text = fdict.get("prefix", fdict["file_name"])
-            hyperlink_text = f"{prefix_text}{suffix}"
+            size_bytes = getattr(fdict["file_info"], "file_size", None)
+            size_str = format_file_size(size_bytes) if size_bytes else "Unknown"
+            dur = fdict.get("additional")
+            dur_str = format_duration(dur) if dur and dur.isdigit() else ""
+            suffix = f" (Size: {size_str}"
+            if dur_str:
+                suffix += f", Duration: {dur_str}"
+            suffix += ")"
+            hyperlink_text = f"{fdict.get('prefix', fdict['file_name'])}{suffix}"
             hyperlink_msg = f"[{hyperlink_text}]({hyperlink_url})"
             await bot.send_message(chat_id=context.user_data["target_b"], text=hyperlink_msg, parse_mode="Markdown")
             results.append(f"File {i} sent successfully.")
@@ -355,6 +386,32 @@ async def bs_select_target_b(update: Update, context: ContextTypes.DEFAULT_TYPE)
             results.append(f"File {i} error: {e}")
     await query.message.reply_text("Batch Send Completed:\n" + "\n".join(results))
     return ConversationHandler.END
+
+# ----- Helper formatting functions -----
+def format_file_size(size_bytes):
+    if size_bytes is None:
+        return "Unknown"
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024*1024:
+        return f"{size_bytes/1024:.2f} KB"
+    elif size_bytes < 1024*1024*1024:
+        return f"{size_bytes/1024/1024:.2f} MB"
+    else:
+        return f"{size_bytes/1024/1024/1024:.2f} GB"
+
+def format_duration(seconds):
+    try:
+        seconds = int(seconds)
+    except:
+        return ""
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    s = seconds % 60
+    if h > 0:
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    else:
+        return f"{m:02d}:{s:02d}"
 
 # ----- Main Function -----
 def main():
