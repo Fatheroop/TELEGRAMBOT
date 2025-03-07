@@ -374,7 +374,7 @@ def main():
     app.add_handler(bs_conv)
     
     # Log messages from groups for TOC
-    app.add_handler(MessageHandler(filters.ChatType(["group", "supergroup", "channel"]) & ~filters.COMMAND, log_messages))
+    app.add_handler(MessageHandler((filters.ChatType.GROUPS | filters.ChatType.CHANNEL) & ~filters.COMMAND, log_messages))
     
     WEBHOOK_URL = os.getenv("WEBHOOK_URL")
     if WEBHOOK_URL:
