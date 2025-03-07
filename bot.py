@@ -14,7 +14,7 @@ from telegram.ext import (
 )
 
 # ----- Conversation states for /batchsend -----
-BATCH_COLLECT, BATCH_GET_PREFIX, BS_TARGET_A, BS_TARGET_B = range(100, 104)
+BATCH_COLLECT, BATCH_GET_PREFIX, BS_TARGET = range(100, 103)
 
 # ----- Conversation state for /toc -----
 TOC_CHOOSE = 300
@@ -24,7 +24,7 @@ GROUPS_FILE = "groups.json"
 PASSWORD_FILE = "password.json"  # stores {"password": "admin"} by default
 
 # ----- Global Message Logger for TOC -----
-# Logs up to 100 messages per chat.
+# Stores up to 100 messages per chat.
 chat_logs = {}  # {chat_id: [ { "message_id": int, "snippet": str }, ... ]}
 
 # ----- Utility Functions -----
@@ -114,7 +114,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/changepassword <old> <new> – Change password\n"
         "/addgroup – Add current chat to group list\n"
         "/addprivatechannel <channel_id> [custom name] – Add a private channel manually\n"
-        "/toc – Get a TOC of recent messages from a selected group\n"
+        "/toc – Get a Table of Contents of recent messages from a selected group\n"
         "/batchsend – Batch send files\n"
         "/commands – Show command list"
     )
@@ -179,7 +179,16 @@ async def addprivatechannel(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         save_groups(groups)
         await update.effective_message.reply_text(f"Private channel '{custom_name}' added successfully.")
 
-# ----- /toc: Table of Contents for a selected group (Protected) -----
+@require_login
+async def listgroups(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    groups = load_groups()
+    if not groups:
+        await update.effective_message.reply_text("No groups available. Use /addgroup to add one.")
+    else:
+        text = "Available Groups:\n" + "\n".join(f"- {title} (ID: {chat_id})" for chat_id, title in groups.items())
+        await update.effective_message.reply_text(text)
+
+# ----- TOC (Table of Contents) for a Selected Group (Protected) -----
 @require_login
 async def toc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     groups = load_groups()
@@ -206,7 +215,7 @@ async def toc_select_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await query.message.reply_text(text, disable_web_page_preview=True)
     return ConversationHandler.END
 
-# ----- /batchsend Conversation (Protected) -----
+# ----- BatchSend Conversation (Protected) -----
 @require_login
 async def batchsend_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["files"] = []
@@ -232,7 +241,7 @@ async def bs_collect_file(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         file_info = msg.video
         file_type = "video"
         file_name = file_info.file_name if file_info.file_name else "video.mp4"
-        additional = str(file_info.duration)  # raw duration in seconds
+        additional = str(file_info.duration)
     else:
         await msg.reply_text("Unsupported file type. Send a document, photo, or video.")
         return BATCH_COLLECT
@@ -303,7 +312,21 @@ async def bs_select_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 link_cid = str(cid)
             mid = sent.message_id
             hyperlink_url = f"https://t.me/c/{link_cid}/{mid}"
-            size_str = format_file_size(getattr(fdict["file_info"], "file_size", None))\n            \n            # Format duration only if numeric\n            dur_raw = fdict.get("additional")\n            dur_str = format_duration(dur_raw) if dur_raw and dur_raw.isdigit() else \"\"\n            suffix = f\" (Size: {size_str}\"\n            if dur_str:\n                suffix += f\", Duration: {dur_str}\"\n            suffix += \")\"\n            hyperlink_text = f\"{fdict.get('prefix', fdict['file_name'])}{suffix}\"\n            hyperlink_msg = f\"[{hyperlink_text}]({hyperlink_url})\"\n            await bot.send_message(chat_id=target, text=hyperlink_msg, parse_mode=\"Markdown\")\n            results.append(f\"File {i} sent successfully.\")\n        except Exception as e:\n            results.append(f\"File {i} error: {e}\")\n    await query.message.reply_text(\"Batch Send Completed:\\n\" + \"\\n\".join(results))\n    return ConversationHandler.END
+            size_str = format_file_size(getattr(fdict["file_info"], "file_size", None))
+            dur_raw = fdict.get("additional")
+            dur_str = format_duration(dur_raw) if dur_raw and dur_raw.isdigit() else ""
+            suffix = f" (Size: {size_str}"
+            if dur_str:
+                suffix += f", Duration: {dur_str}"
+            suffix += ")"
+            hyperlink_text = f"{fdict.get('prefix', fdict['file_name'])}{suffix}"
+            hyperlink_msg = f"[{hyperlink_text}]({hyperlink_url})"
+            await bot.send_message(chat_id=target, text=hyperlink_msg, parse_mode="Markdown")
+            results.append(f"File {i} sent successfully.")
+        except Exception as e:
+            results.append(f"File {i} error: {e}")
+    await query.message.reply_text("Batch Send Completed:\n" + "\n".join(results))
+    return ConversationHandler.END
 
 # ----- Main Function -----
 def main():
@@ -312,19 +335,19 @@ def main():
         logger.error("BOT_TOKEN not set.")
         return
     app = Application.builder().token(BOT_TOKEN).build()
-
+    
     # Public commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("commands", commands_list))
     app.add_handler(CommandHandler("login", login))
     app.add_handler(CommandHandler("changepassword", changepassword))
-
+    
     # Protected commands
     app.add_handler(CommandHandler("addgroup", addgroup))
     app.add_handler(CommandHandler("addprivatechannel", addprivatechannel))
     app.add_handler(CommandHandler("toc", toc_command))
     app.add_handler(CommandHandler("batchsend", batchsend_command))
-
+    
     # TOC conversation
     toc_conv = ConversationHandler(
         entry_points=[CommandHandler("toc", toc_command)],
@@ -334,7 +357,7 @@ def main():
         fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
     )
     app.add_handler(toc_conv)
-
+    
     # Batchsend conversation
     bs_conv = ConversationHandler(
         entry_points=[CommandHandler("batchsend", batchsend_command)],
@@ -349,10 +372,10 @@ def main():
         fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
     )
     app.add_handler(bs_conv)
-
-    # Log messages for TOC
+    
+    # Log messages from groups for TOC
     app.add_handler(MessageHandler(filters.ChatType(["group", "supergroup", "channel"]) & ~filters.COMMAND, log_messages))
-
+    
     WEBHOOK_URL = os.getenv("WEBHOOK_URL")
     if WEBHOOK_URL:
         PORT = int(os.getenv("PORT", "8443"))
