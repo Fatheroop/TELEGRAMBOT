@@ -14,10 +14,10 @@ from telegram.ext import (
 # Define conversation states for the file process.
 GET_FILE, GET_PREFIX, GET_TARGET_GROUP_A, GET_TARGET_GROUP_B = range(4)
 
-# File to persist attached groups.
+# File to persist attached groups/channels.
 GROUPS_FILE = "groups.json"
 
-# Utility functions to load and save groups.
+# Utility functions to load and save attached chats.
 def load_groups():
     try:
         with open(GROUPS_FILE, "r") as f:
@@ -44,12 +44,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Welcome!\n\n"
         "Available commands:\n"
         "/sendfile - Start the file forwarding process.\n"
-        "/addgroup - (In a group chat) Register this group with the bot.\n"
-        "/listgroups - List all groups attached to the bot.\n\n"
-        "How to connect groups:\n"
-        "1. Add the bot to your group and promote it to admin.\n"
-        "2. In that group, type /addgroup to attach the group to the bot.\n"
-        "3. You can then use /listgroups to see all attached groups."
+        "/addgroup - (In a group or channel chat) Register this chat with the bot.\n"
+        "/listgroups - List all attached chats (groups/channels).\n\n"
+        "How to connect chats:\n"
+        "1. Add the bot to your group, supergroup, or channel (channels with topics are supported) and promote it to admin.\n"
+        "2. In that chat, type /addgroup to attach it.\n"
+        "3. Use /listgroups to see all attached chats."
     )
     await update.message.reply_text(help_text)
 
@@ -192,30 +192,32 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Operation cancelled.")
     return ConversationHandler.END
 
-# --- Commands for managing attached groups ---
+# --- Commands for managing attached groups/channels ---
 
 async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
-    # Check if this command is run in a group.
-    if chat.type not in ["group", "supergroup"]:
-        await update.message.reply_text("This command should be used in a group chat.")
+    # Allow groups, supergroups, and channels.
+    if chat.type not in ["group", "supergroup", "channel"]:
+        await update.message.reply_text("This command should be used in a group, supergroup, or channel chat.")
         return
 
     groups = load_groups()
     chat_id = str(chat.id)
+    # Use the chat title or, if not available, the username.
+    chat_title = chat.title if chat.title else (chat.username if chat.username else "Unnamed Chat")
     if chat_id in groups:
-        await update.message.reply_text(f"Group '{groups[chat_id]}' is already attached.")
+        await update.message.reply_text(f"Chat '{groups[chat_id]}' is already attached.")
     else:
-        groups[chat_id] = chat.title if chat.title else "Unnamed Group"
+        groups[chat_id] = chat_title
         save_groups(groups)
-        await update.message.reply_text(f"Group '{groups[chat_id]}' added successfully.")
+        await update.message.reply_text(f"Chat '{chat_title}' added successfully.")
 
 async def listgroups(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     groups = load_groups()
     if not groups:
-        await update.message.reply_text("No groups attached yet.")
+        await update.message.reply_text("No groups/channels attached yet.")
     else:
-        msg = "Attached Groups:\n"
+        msg = "Attached Chats:\n"
         for chat_id, title in groups.items():
             msg += f"- {title} (ID: {chat_id})\n"
         await update.message.reply_text(msg)
@@ -246,7 +248,7 @@ def main():
     application.add_handler(CommandHandler("addgroup", addgroup))
     application.add_handler(CommandHandler("listgroups", listgroups))
 
-    # Choose webhook mode if WEBHOOK_URL is set; otherwise use polling.
+    # Use webhook mode if WEBHOOK_URL is set; otherwise use polling.
     WEBHOOK_URL = os.getenv("WEBHOOK_URL")
     if WEBHOOK_URL:
         PORT = int(os.getenv("PORT", "8443"))
