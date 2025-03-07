@@ -2,7 +2,12 @@ import os
 import json
 import logging
 import re
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import (
+    Update,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    ForwardedMessage,
+)
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -16,18 +21,23 @@ from telegram.ext import (
 # --- States for /sendfile conversation (single send) ---
 GET_FILE, GET_PREFIX, GET_TARGET_A, GET_TARGET_B = range(4)
 
-# --- New states for /batchsend conversation ---
-# We'll first collect files, then ask for prefixes, then select targets and process send.
+# --- States for /batchsend conversation ---
 BATCH_COLLECT = 100
 BATCH_GET_PREFIX = 101
 BATCH_SELECT_TARGET_A = 102
 BATCH_SELECT_TARGET_B = 103
 BATCH_PROCESS = 104
 
-# File to persist attached chats.
+# --- States for /addprivatechannel conversation ---
+ADD_PRIV_START = 210
+ADD_PRIV_CHOICE = 211
+ADD_PRIV_FORWARD = 212
+ADD_PRIV_ID = 213
+
+# File to persist attached chats
 GROUPS_FILE = "groups.json"
 
-# Utility functions for attached chats.
+# Utility functions for attached chats
 def load_groups():
     try:
         with open(GROUPS_FILE, "r") as f:
@@ -40,7 +50,7 @@ def save_groups(groups):
     with open(GROUPS_FILE, "w") as f:
         json.dump(groups, f)
 
-# Set up logging.
+# Set up logging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -48,6 +58,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- Basic Commands ---
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     help_text = (
         "Welcome!\n\n"
@@ -56,16 +67,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/batchsend - Batch send files: first collect files, then set a prefix for each, then select targets.\n"
         "/retrievemedia - Given a Telegram message hyperlink, retrieve its media.\n"
         "/addgroup - Register this chat (group, public channel, or private chat) as attached.\n"
-        "/addprivatechannel - (In a private chat) Forward a message from your private channel to add it.\n"
+        "/addprivatechannel - Start a flow to add a private channel (either forward a message or enter channel ID).\n"
         "/listgroups - List all attached chats.\n\n"
         "How to connect chats:\n"
         "1. For groups or public channels, add the bot and use /addgroup.\n"
-        "2. For private channels, forward a message from the channel to the bot in a private chat and use /addprivatechannel.\n"
+        "2. For private channels, you can either forward a message from the channel or manually enter the channel ID.\n"
         "3. Use /listgroups to view all attached chats."
     )
     await update.effective_message.reply_text(help_text)
 
-# --- Command to add a chat (group, public channel, or private chat) ---
+# --- /addgroup for normal groups/public channels ---
 async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
     groups = load_groups()
@@ -78,28 +89,88 @@ async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         save_groups(groups)
         await update.effective_message.reply_text(f"Chat '{chat_title}' added successfully.")
 
-# --- Command to add a private channel ---
-async def addprivatechannel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+# --- /addprivatechannel conversation ---
+async def addprivatechannel_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Ask user how they'd like to add the private channel."""
+    buttons = [
+        [
+            InlineKeyboardButton("Forward Message", callback_data="addPriv_forward"),
+            InlineKeyboardButton("Enter Channel ID", callback_data="addPriv_id"),
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(buttons)
+    await update.effective_message.reply_text(
+        "How would you like to add the private channel?",
+        reply_markup=reply_markup
+    )
+    return ADD_PRIV_CHOICE
+
+async def addprivatechannel_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle the inline keyboard choice for forward or manual ID."""
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    if data == "addPriv_forward":
+        # Ask user to forward a message from the private channel
+        await query.edit_message_text(
+            "Please forward a message from your private channel to this chat."
+        )
+        return ADD_PRIV_FORWARD
+    elif data == "addPriv_id":
+        # Ask user for channel ID
+        await query.edit_message_text(
+            "Please enter the private channel ID (e.g. -1001234567890)."
+        )
+        return ADD_PRIV_ID
+    else:
+        await query.edit_message_text("Invalid selection.")
+        return ConversationHandler.END
+
+async def addprivatechannel_forward(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle the forwarded message from the private channel."""
     msg = update.effective_message
-    # Expect the user to forward a message from the private channel.
-    if not msg.forward_from_chat:
-        await msg.reply_text("Please forward a message from your private channel to add it.")
-        return
-    channel = msg.forward_from_chat
-    if channel.type != "channel":
-        await msg.reply_text("The forwarded message is not from a channel.")
-        return
-    channel_id = str(channel.id)
-    channel_title = channel.title if channel.title else (channel.username if channel.username else "Unnamed Private Channel")
+    if msg.forward_from_chat and msg.forward_from_chat.type == "channel":
+        channel = msg.forward_from_chat
+        channel_id = str(channel.id)
+        channel_title = channel.title if channel.title else (channel.username if channel.username else "Unnamed Private Channel")
+        groups = load_groups()
+        if channel_id in groups:
+            await msg.reply_text(f"Private channel '{groups[channel_id]}' is already attached.")
+        else:
+            groups[channel_id] = channel_title
+            save_groups(groups)
+            await msg.reply_text(f"Private channel '{channel_title}' added successfully.")
+        return ConversationHandler.END
+    else:
+        await msg.reply_text(
+            "That doesn't look like a forwarded message from a private channel. "
+            "Please forward a valid message from your private channel, or /cancel."
+        )
+        return ADD_PRIV_FORWARD
+
+async def addprivatechannel_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle the user manually entering the channel ID."""
+    msg = update.effective_message
+    text = msg.text.strip() if msg.text else ""
+    # Validate that it's in the format -1001234567890
+    if not text.startswith("-100"):
+        await msg.reply_text("Channel ID usually starts with -100. Please try again or /cancel.")
+        return ADD_PRIV_ID
+
+    channel_id = text
     groups = load_groups()
     if channel_id in groups:
         await msg.reply_text(f"Private channel '{groups[channel_id]}' is already attached.")
     else:
-        groups[channel_id] = channel_title
+        # We don't know the channel's title if user doesn't supply it,
+        # so we can store a placeholder or just store the ID as the name.
+        placeholder_title = "PrivateChannel_" + channel_id
+        groups[channel_id] = placeholder_title
         save_groups(groups)
-        await msg.reply_text(f"Private channel '{channel_title}' added successfully.")
+        await msg.reply_text(f"Private channel '{placeholder_title}' added successfully.")
+    return ConversationHandler.END
 
-# --- Command to list attached chats ---
+# --- /listgroups ---
 async def listgroups(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     groups = load_groups()
     if not groups:
@@ -110,7 +181,33 @@ async def listgroups(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             msg += f"- {title} (ID: {chat_id})\n"
         await update.effective_message.reply_text(msg)
 
-# --- Conversation for /sendfile (single file send) ---
+# --- /retrievemedia ---
+async def retrievemedia(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.effective_message
+    text = msg.text.strip() if msg.text else ""
+    pattern = r"https://t\.me/c/(\d+)/(\d+)"
+    match = re.search(pattern, text)
+    if not match:
+        await msg.reply_text("No valid Telegram message hyperlink found. Use format: https://t.me/c/<chatid>/<message_id>")
+        return
+    chat_part, message_id_str = match.groups()
+    try:
+        message_id = int(message_id_str)
+    except ValueError:
+        await msg.reply_text("Invalid message ID in the URL.")
+        return
+    from_chat_id = f"-100{chat_part}"
+    try:
+        await context.bot.forward_message(
+            chat_id=msg.chat.id,
+            from_chat_id=from_chat_id,
+            message_id=message_id
+        )
+        await msg.reply_text("Media retrieved and forwarded below.")
+    except Exception as e:
+        await msg.reply_text(f"Error retrieving media: {e}")
+
+# --- Single-file send (/sendfile) conversation ---
 async def sendfile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.effective_message.reply_text("Please send me the file (document, photo, or video).")
     return GET_FILE
@@ -193,7 +290,7 @@ async def select_target_b(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     else:
         await query.edit_message_text("Invalid selection.")
         return ConversationHandler.END
-    # Now send the file and hyperlink.
+    # Now send the file to Target A, build hyperlink, and send to Target B
     bot = context.bot
     target_a = context.user_data["target_group_a"]
     file_info = context.user_data["file_info"]
@@ -249,8 +346,7 @@ async def select_target_b(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await query.message.reply_text("File forwarded and hyperlink message sent successfully!")
     return ConversationHandler.END
 
-# --- Optimized Conversation for /batchsend ---
-# First, collect multiple files until the user types /done.
+# --- /batchsend conversation (optimized) ---
 async def batchsend_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["files"] = []
     await update.effective_message.reply_text(
@@ -280,7 +376,6 @@ async def batch_collect_file(update: Update, context: ContextTypes.DEFAULT_TYPE)
     else:
         await msg.reply_text("Unsupported file type. Please send a document, photo, or video.")
         return BATCH_COLLECT
-    # Append file details to the list.
     file_dict = {
         "file_info": file_info,
         "file_type": file_type,
@@ -408,39 +503,30 @@ async def batch_select_target_b(update: Update, context: ContextTypes.DEFAULT_TY
     await query.message.reply_text("Batch Send Completed:\n" + "\n".join(results))
     return ConversationHandler.END
 
-# --- Command to retrieve media from hyperlink ---
-async def retrievemedia(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    msg = update.effective_message
-    text = msg.text.strip() if msg.text else ""
-    pattern = r"https://t\.me/c/(\d+)/(\d+)"
-    match = re.search(pattern, text)
-    if not match:
-        await msg.reply_text("No valid Telegram message hyperlink found. Use format: https://t.me/c/<chatid>/<message_id>")
-        return
-    chat_part, message_id_str = match.groups()
-    try:
-        message_id = int(message_id_str)
-    except ValueError:
-        await msg.reply_text("Invalid message ID in the URL.")
-        return
-    from_chat_id = f"-100{chat_part}"
-    try:
-        forwarded = await context.bot.forward_message(
-            chat_id=msg.chat.id,
-            from_chat_id=from_chat_id,
-            message_id=message_id
-        )
-        await msg.reply_text("Media retrieved and forwarded below.")
-    except Exception as e:
-        await msg.reply_text(f"Error retrieving media: {e}")
-
 # --- Main function ---
 def main():
     BOT_TOKEN = os.getenv("BOT_TOKEN")
     if not BOT_TOKEN:
         logger.error("BOT_TOKEN environment variable not set.")
         return
+
     application = Application.builder().token(BOT_TOKEN).build()
+
+    # /addprivatechannel conversation handler
+    addprivatechannel_conv = ConversationHandler(
+        entry_points=[CommandHandler("addprivatechannel", addprivatechannel_start)],
+        states={
+            ADD_PRIV_CHOICE: [CallbackQueryHandler(addprivatechannel_choice)],
+            ADD_PRIV_FORWARD: [
+                MessageHandler(filters.ALL & ~filters.COMMAND, addprivatechannel_forward)
+            ],
+            ADD_PRIV_ID: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, addprivatechannel_id)
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+    )
+    application.add_handler(addprivatechannel_conv)
 
     # /sendfile conversation handler
     sendfile_conv = ConversationHandler(
@@ -455,7 +541,7 @@ def main():
     )
     application.add_handler(sendfile_conv)
 
-    # /batchsend conversation handler (optimized batch flow)
+    # /batchsend conversation handler
     batchsend_conv = ConversationHandler(
         entry_points=[CommandHandler("batchsend", batchsend_command)],
         states={
@@ -471,13 +557,13 @@ def main():
     )
     application.add_handler(batchsend_conv)
 
-    # /retrievemedia, /addgroup, /addprivatechannel, /listgroups, and /start commands.
+    # Other commands
     application.add_handler(CommandHandler("retrievemedia", retrievemedia))
     application.add_handler(CommandHandler("addgroup", addgroup))
-    application.add_handler(CommandHandler("addprivatechannel", addprivatechannel))
     application.add_handler(CommandHandler("listgroups", listgroups))
     application.add_handler(CommandHandler("start", start))
 
+    # Webhook or polling
     WEBHOOK_URL = os.getenv("WEBHOOK_URL")
     if WEBHOOK_URL:
         PORT = int(os.getenv("PORT", "8443"))
