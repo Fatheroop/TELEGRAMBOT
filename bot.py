@@ -13,17 +13,14 @@ from telegram.ext import (
     filters,
 )
 
-# -----------------------------
-# Conversation states for /batchsend
+# ----- Conversation states for /batchsend -----
 BATCH_COLLECT, BATCH_GET_PREFIX, BS_TARGET_A, BS_TARGET_B = range(100, 104)
 
-# File to store attached chats
+# ----- Files for persistent storage -----
 GROUPS_FILE = "groups.json"
-# File to store the bot password
-PASSWORD_FILE = "password.json"
+PASSWORD_FILE = "password.json"  # stores {"password": "admin"} initially
 
-# -----------------------------
-# Utility functions
+# ----- Utility Functions -----
 def load_groups():
     try:
         with open(GROUPS_FILE, "r") as f:
@@ -72,13 +69,12 @@ def format_duration(seconds):
     else:
         return f"{m:02d}:{s:02d}"
 
-# -----------------------------
-# Logging
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+# ----- Logging -----
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+                    level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# -----------------------------
-# Authentication Decorator
+# ----- Authentication: Protected Commands -----
 def require_login(func):
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not context.user_data.get("authenticated", False):
@@ -87,23 +83,18 @@ def require_login(func):
         return await func(update, context)
     return wrapper
 
-# -----------------------------
-# /login command
+# ----- /login and /changepassword Commands -----
 async def login(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     args = context.args
     if not args:
         await update.effective_message.reply_text("Usage: /login <password>")
         return
-    user_input = args[0]
-    current_password = load_password()
-    if user_input == current_password:
+    if args[0] == load_password():
         context.user_data["authenticated"] = True
         await update.effective_message.reply_text("Login successful!")
     else:
         await update.effective_message.reply_text("Incorrect password.")
 
-# -----------------------------
-# /changepassword command
 @require_login
 async def changepassword(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     args = context.args
@@ -117,8 +108,25 @@ async def changepassword(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     save_password(new)
     await update.effective_message.reply_text("Password changed successfully.")
 
-# -----------------------------
-# /addgroup: add current chat to attached list
+# ----- /start and /commands (public) -----
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = (
+        "Welcome to BatchSend Bot (Protected)!\n\n"
+        "Available commands:\n"
+        "/login <password> – Log in (default password: admin)\n"
+        "/changepassword <old> <new> – Change your password\n"
+        "/addgroup – Add current chat to attached list\n"
+        "/addprivatechannel <channel_id> [custom name] – Add a private channel\n"
+        "/listgroups – List attached chats\n"
+        "/batchsend – Batch send files\n"
+        "/commands – Show this command list again"
+    )
+    await update.effective_message.reply_text(text)
+
+async def commands_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await start(update, context)
+
+# ----- /addgroup (Protected) -----
 @require_login
 async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
@@ -132,8 +140,7 @@ async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         save_groups(groups)
         await update.effective_message.reply_text(f"Chat '{chat_title}' added successfully.")
 
-# -----------------------------
-# /addprivatechannel: manual only (usage: /addprivatechannel <channel_id> [custom name])
+# ----- /addprivatechannel (Protected, manual only) -----
 @require_login
 async def addprivatechannel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     args = context.args
@@ -153,8 +160,7 @@ async def addprivatechannel(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         save_groups(groups)
         await update.effective_message.reply_text(f"Private channel '{custom_name}' added successfully.")
 
-# -----------------------------
-# /listgroups: list attached chats
+# ----- /listgroups (Protected) -----
 @require_login
 async def listgroups(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     groups = load_groups()
@@ -164,8 +170,7 @@ async def listgroups(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         text = "Attached Chats:\n" + "\n".join(f"- {title} (ID: {chat_id})" for chat_id, title in groups.items())
         await update.effective_message.reply_text(text)
 
-# -----------------------------
-# /batchsend Conversation (only batch send is supported for efficiency)
+# ----- /batchsend Conversation (Protected) -----
 @require_login
 async def batchsend_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["files"] = []
@@ -190,7 +195,7 @@ async def bs_collect_file(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         file_info = msg.video
         file_type = "video"
         file_name = file_info.file_name if file_info.file_name else "video.mp4"
-        additional = str(file_info.duration)  # store raw duration (seconds)
+        additional = str(file_info.duration)  # raw duration in seconds
     else:
         await msg.reply_text("Unsupported file type. Send a document, photo, or video.")
         return BATCH_COLLECT
@@ -228,7 +233,7 @@ async def bs_receive_prefix(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await msg.reply_text(f"Batch Send: For file {idx+1} ({next_file['file_name']}), enter a prefix (or '-' for default).")
         return BATCH_GET_PREFIX
     else:
-        # Show inline buttons for target selection using attached chats
+        # Show inline buttons for target selection from attached chats
         groups = load_groups()
         if not groups:
             await msg.reply_text("No attached chats available. Use /addgroup or /addprivatechannel.")
@@ -304,13 +309,13 @@ def main():
         return
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # Public commands: /start and /commands
+    # Public commands: /start, /commands, /login, /changepassword
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("commands", commands_list))
-
-    # Protected commands: require login
     app.add_handler(CommandHandler("login", login))
     app.add_handler(CommandHandler("changepassword", changepassword))
+
+    # Protected commands (require login)
     app.add_handler(CommandHandler("addgroup", addgroup))
     app.add_handler(CommandHandler("addprivatechannel", addprivatechannel))
     app.add_handler(CommandHandler("listgroups", listgroups))
@@ -332,7 +337,6 @@ def main():
     )
     app.add_handler(bs_conv)
 
-    # Run webhook if WEBHOOK_URL is set, otherwise run polling.
     WEBHOOK_URL = os.getenv("WEBHOOK_URL")
     if WEBHOOK_URL:
         PORT = int(os.getenv("PORT", "8443"))
