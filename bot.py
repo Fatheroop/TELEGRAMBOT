@@ -1,4 +1,4 @@
-import os
+=import os
 import json
 import logging
 import re
@@ -348,17 +348,18 @@ def main():
     app.add_handler(CommandHandler("toc", toc_command))
     app.add_handler(CommandHandler("batchsend", batchsend_command))
     
-    # TOC conversation
+    # TOC conversation with per_message=True to track callback queries properly
     toc_conv = ConversationHandler(
         entry_points=[CommandHandler("toc", toc_command)],
         states={
             TOC_CHOOSE: [CallbackQueryHandler(toc_select_group, pattern=r"^toc_group:")]
         },
         fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+        per_message=True
     )
     app.add_handler(toc_conv)
     
-    # Batchsend conversation
+    # Batchsend conversation with per_message=True
     bs_conv = ConversationHandler(
         entry_points=[CommandHandler("batchsend", batchsend_command)],
         states={
@@ -370,6 +371,7 @@ def main():
             BS_TARGET: [CallbackQueryHandler(bs_select_target, pattern=r"^bs_target:")]
         },
         fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+        per_message=True
     )
     app.add_handler(bs_conv)
     
