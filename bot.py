@@ -13,13 +13,13 @@ from telegram.ext import (
     filters,
 )
 
-# ----- States for /sendfile conversation -----
-GET_FILE, GET_PREFIX, GET_TARGET_A, GET_TARGET_B = range(4)
+# ----- States for /sendfile conversation (single send) -----
+GET_FILE, GET_PREFIX, SF_TARGET_A, SF_TARGET_B = range(4)
 
 # ----- States for /batchsend conversation -----
-BATCH_COLLECT, BATCH_GET_PREFIX, BATCH_TARGET_A, BATCH_TARGET_B = range(100, 104)
+BATCH_COLLECT, BATCH_GET_PREFIX, BS_TARGET_A, BS_TARGET_B = range(100, 104)
 
-# File to persist attached chats (groups and channels)
+# File to store attached chats (groups and channels)
 GROUPS_FILE = "groups.json"
 
 # Utility functions
@@ -39,30 +39,25 @@ logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ----- /commands: show command list -----
-async def commands_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    cmd_text = (
-        "Available Commands:\n"
-        "/start – Show welcome message and main menu\n"
-        "/commands – List available commands\n"
+# ----- /start and /commands -----
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    welcome_text = (
+        "Welcome to FileLink Bot!\n\n"
+        "Available commands:\n"
+        "/commands – Show command list\n"
         "/addgroup – Add current chat to attached list\n"
-        "/addprivatechannel <channel_id> [custom name] – Add a private channel manually\n"
+        "/addprivatechannel <channel_id> [custom name] – Manually add a private channel\n"
         "/listgroups – List attached chats\n"
         "/retrievemedia – Retrieve media from a Telegram hyperlink\n"
         "/sendfile – Send a file (single file send flow)\n"
         "/batchsend – Batch send multiple files\n"
     )
-    await update.effective_message.reply_text(cmd_text)
-
-# ----- /start: show welcome and main menu (text-based) -----
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    welcome_text = (
-        "Welcome to the FileLink Bot!\n"
-        "Type /commands to see the available commands."
-    )
     await update.effective_message.reply_text(welcome_text)
 
-# ----- /addgroup: add current chat -----
+async def commands_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await start(update, context)
+
+# ----- /addgroup -----
 async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
     groups = load_groups()
@@ -75,8 +70,8 @@ async def addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         save_groups(groups)
         await update.effective_message.reply_text(f"Chat '{chat_title}' added successfully.")
 
-# ----- /addprivatechannel: manual only -----
-# Usage: /addprivatechannel -1001234567890 MyCustomName
+# ----- /addprivatechannel (manual only) -----
+# Usage: /addprivatechannel <channel_id> [custom name]
 async def addprivatechannel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     args = context.args
     if not args:
@@ -95,7 +90,7 @@ async def addprivatechannel(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         save_groups(groups)
         await update.effective_message.reply_text(f"Private channel '{custom_name}' added successfully.")
 
-# ----- /listgroups: list all attached chats -----
+# ----- /listgroups -----
 async def listgroups(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     groups = load_groups()
     if not groups:
@@ -104,7 +99,7 @@ async def listgroups(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         text = "Attached Chats:\n" + "\n".join(f"- {title} (ID: {chat_id})" for chat_id, title in groups.items())
         await update.effective_message.reply_text(text)
 
-# ----- /retrievemedia: forward media from hyperlink -----
+# ----- /retrievemedia -----
 async def retrievemedia(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
     text = msg.text.strip() if msg.text else ""
@@ -131,7 +126,6 @@ async def retrievemedia(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await msg.reply_text(f"Error retrieving media: {e}")
 
 # ----- /sendfile Conversation -----
-# Flow: Ask for file, then prefix, then target chats.
 async def sendfile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.effective_message.reply_text("Sendfile: Please send the file (document, photo, or video).")
     return GET_FILE
@@ -173,65 +167,68 @@ async def sf_receive_prefix(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     prefix = context.user_data.get("file_name") if text in ["-", ""] else text
     context.user_data["prefix"] = prefix
     groups = load_groups()
-    if groups:
-        # Show inline options for target chats
-        options = "\n".join(f"{title}: {chat_id}" for chat_id, title in groups.items())
-        await msg.reply_text("Attached Chats:\n" + options +
-                             "\n\nEnter Target A chat id (for file forwarding):")
-    else:
-        await msg.reply_text("No attached chats available. Please add one using /addgroup or /addprivatechannel. Enter Target A chat id:")
-    return GET_TARGET_A
+    if not groups:
+        await msg.reply_text("No attached chats available. Use /addgroup or /addprivatechannel.")
+        return ConversationHandler.END
+    # Show inline buttons for target selection
+    buttons_a = [[InlineKeyboardButton(title, callback_data=f"sf_targetA:{chat_id}")]
+                 for chat_id, title in groups.items()]
+    await msg.reply_text("Select target chat for sending the file (Target A):", reply_markup=InlineKeyboardMarkup(buttons_a))
+    return SF_TARGET_A
 
-async def sf_receive_target_a(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    msg = update.effective_message
-    context.user_data["target_a"] = msg.text.strip()
-    await msg.reply_text("Enter Target B chat id (for hyperlink message):")
-    return GET_TARGET_B
+async def sf_select_target_a(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    target_a = query.data.split("sf_targetA:")[1]
+    context.user_data["target_a"] = target_a
+    buttons_b = [[InlineKeyboardButton(title, callback_data=f"sf_targetB:{chat_id}")]
+                 for chat_id, title in load_groups().items()]
+    await query.message.reply_text("Select target chat for sending the hyperlink (Target B):", reply_markup=InlineKeyboardMarkup(buttons_b))
+    return SF_TARGET_B
 
-async def sf_receive_target_b(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    msg = update.effective_message
-    context.user_data["target_b"] = msg.text.strip()
+async def sf_select_target_b(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    target_b = query.data.split("sf_targetB:")[1]
+    context.user_data["target_b"] = target_b
     bot = context.bot
     try:
-        # Forward file to Target A
         if context.user_data["file_type"] == "document":
-            sent = await bot.send_document(
+            sent_msg = await bot.send_document(
                 chat_id=context.user_data["target_a"],
                 document=context.user_data["file_info"].file_id,
                 caption=f"Forwarded file: {context.user_data['file_name']}"
             )
         elif context.user_data["file_type"] == "photo":
-            sent = await bot.send_photo(
+            sent_msg = await bot.send_photo(
                 chat_id=context.user_data["target_a"],
                 photo=context.user_data["file_info"].file_id,
                 caption="Forwarded photo"
             )
         elif context.user_data["file_type"] == "video":
-            sent = await bot.send_video(
+            sent_msg = await bot.send_video(
                 chat_id=context.user_data["target_a"],
                 video=context.user_data["file_info"].file_id,
                 caption="Forwarded video"
             )
-        # Construct hyperlink from sent message
-        chat_id = sent.chat.id
+        chat_id = sent_msg.chat.id
         if isinstance(chat_id, int) and str(chat_id).startswith("-100"):
             link_chat = str(chat_id)[4:]
         else:
             link_chat = str(chat_id)
-        msg_id = sent.message_id
+        msg_id = sent_msg.message_id
         hyperlink_url = f"https://t.me/c/{link_chat}/{msg_id}"
         file_size = getattr(context.user_data["file_info"], "file_size", "Unknown")
         suffix = f" (Size: {file_size} bytes{context.user_data.get('additional','')})"
         hyperlink_text = f"{context.user_data.get('prefix')}{suffix}"
         hyperlink_msg = f"[{hyperlink_text}]({hyperlink_url})"
         await bot.send_message(chat_id=context.user_data["target_b"], text=hyperlink_msg, parse_mode="Markdown")
-        await msg.reply_text("File and hyperlink sent successfully.")
+        await query.message.reply_text("File and hyperlink sent successfully.")
     except Exception as e:
-        await msg.reply_text(f"Error: {e}")
+        await query.message.reply_text(f"Error: {e}")
     return ConversationHandler.END
 
 # ----- /batchsend Conversation -----
-# Flow: Collect files until /done, then for each file ask for prefix, then ask targets, then process.
 async def batchsend_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["files"] = []
     await update.effective_message.reply_text("Batch Send: Send files one by one. When finished, type /done.")
@@ -293,18 +290,31 @@ async def bs_receive_prefix(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await msg.reply_text(f"Batch Send: For file {idx+1} ({next_file['file_name']}), enter a prefix (or '-' for default).")
         return BATCH_GET_PREFIX
     else:
-        await msg.reply_text("Batch Send: Enter target chat id for sending files (Target A).")
-        return BATCH_TARGET_A
+        # Use inline buttons for target selection
+        groups = load_groups()
+        if not groups:
+            await msg.reply_text("No attached chats available. Use /addgroup or /addprivatechannel.")
+            return ConversationHandler.END
+        buttons_a = [[InlineKeyboardButton(title, callback_data=f"bs_targetA:{chat_id}")]
+                     for chat_id, title in groups.items()]
+        await msg.reply_text("Batch Send: Select target chat for sending files (Target A):", reply_markup=InlineKeyboardMarkup(buttons_a))
+        return BS_TARGET_A
 
-async def bs_receive_target_a(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    msg = update.effective_message
-    context.user_data["target_a"] = msg.text.strip()
-    await msg.reply_text("Batch Send: Enter target chat id for sending hyperlinks (Target B).")
-    return BATCH_TARGET_B
+async def bs_select_target_a(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    target_a = query.data.split("bs_targetA:")[1]
+    context.user_data["target_a"] = target_a
+    buttons_b = [[InlineKeyboardButton(title, callback_data=f"bs_targetB:{chat_id}")]
+                 for chat_id, title in load_groups().items()]
+    await query.message.reply_text("Batch Send: Select target chat for sending hyperlinks (Target B):", reply_markup=InlineKeyboardMarkup(buttons_b))
+    return BS_TARGET_B
 
-async def bs_receive_target_b(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    msg = update.effective_message
-    context.user_data["target_b"] = msg.text.strip()
+async def bs_select_target_b(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    target_b = query.data.split("bs_targetB:")[1]
+    context.user_data["target_b"] = target_b
     bot = context.bot
     results = []
     for i, fdict in enumerate(context.user_data.get("files", []), start=1):
@@ -343,7 +353,7 @@ async def bs_receive_target_b(update: Update, context: ContextTypes.DEFAULT_TYPE
             results.append(f"File {i} sent successfully.")
         except Exception as e:
             results.append(f"File {i} error: {e}")
-    await msg.reply_text("Batch Send Completed:\n" + "\n".join(results))
+    await query.message.reply_text("Batch Send Completed:\n" + "\n".join(results))
     return ConversationHandler.END
 
 # ----- Main Function -----
@@ -361,7 +371,7 @@ def main():
     # /addgroup
     app.add_handler(CommandHandler("addgroup", addgroup))
 
-    # /addprivatechannel (manual only)
+    # /addprivatechannel
     app.add_handler(CommandHandler("addprivatechannel", addprivatechannel))
 
     # /listgroups
@@ -376,8 +386,8 @@ def main():
         states={
             GET_FILE: [MessageHandler(filters.ALL & ~filters.COMMAND, sf_receive_file)],
             GET_PREFIX: [MessageHandler(filters.TEXT & ~filters.COMMAND, sf_receive_prefix)],
-            GET_TARGET_A: [MessageHandler(filters.TEXT & ~filters.COMMAND, sf_receive_target_a)],
-            GET_TARGET_B: [MessageHandler(filters.TEXT & ~filters.COMMAND, sf_receive_target_b)],
+            SF_TARGET_A: [CallbackQueryHandler(sf_select_target_a, pattern=r"^sf_targetA:")],
+            SF_TARGET_B: [CallbackQueryHandler(sf_select_target_b, pattern=r"^sf_targetB:")],
         },
         fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
     )
@@ -392,8 +402,8 @@ def main():
                 CommandHandler("done", batch_done)
             ],
             BATCH_GET_PREFIX: [MessageHandler(filters.TEXT & ~filters.COMMAND, bs_receive_prefix)],
-            BATCH_TARGET_A: [MessageHandler(filters.TEXT & ~filters.COMMAND, bs_receive_target_a)],
-            BATCH_TARGET_B: [MessageHandler(filters.TEXT & ~filters.COMMAND, bs_receive_target_b)],
+            BS_TARGET_A: [CallbackQueryHandler(bs_select_target_a, pattern=r"^bs_targetA:")],
+            BS_TARGET_B: [CallbackQueryHandler(bs_select_target_b, pattern=r"^bs_targetB:")],
         },
         fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
     )
