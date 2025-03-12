@@ -1,0 +1,5 @@
+python-telegram-bot
+nest_asyncio
+requests
+deep-translator
+httpx==0.27.2

@@ -1,0 +1,6 @@
+[build]
+  functions = "netlify/functions"
+  publish = "public"
+
+[build.environment]
+  TELEGRAM_BOT_TOKEN = "7883838296:AAEbNXZVmiA9GlUsqtKGWhrk-Bs5OTQOmVI"
